@@ -1,8 +1,8 @@
 # airi-user-client-mod
 
-airi-user-client-mod is a client-side Fabric mod that captures high-fidelity player context from the real user session and forwards structured signals to Airi Hub for downstream behavior understanding, intent recognition, memory, and companion interaction.
+airi-user-client-mod is the local gameplay-observation pipeline around AIRI. Its intended runtime includes a Minecraft client mod for high-fidelity capture, a local telemetry and episode service for ingestion and derived outputs, and the AIRI desktop client as the downstream consumer.
 
-Unlike a pure bot-side integration, this project is designed around a simple observation: the user client sees the world earlier, more directly, and with less ambiguity than an external agent ever can.
+Unlike a pure bot-side integration, this project is designed around a simple observation: the Minecraft client mod sees the world earlier, more directly, and with less ambiguity than an external agent ever can.
 
 That makes it a better place to collect the raw signals needed to answer questions like:
 - What is the player doing right now?
@@ -10,7 +10,7 @@ That makes it a better place to collect the raw signals needed to answer questio
 - Is a block break part of path clearing, resource gathering, or construction?
 - Is the player focused, idle, interrupted, under attack, or transitioning between goals?
 
-This mod does not try to solve all semantics inside Minecraft itself. Instead, it provides a reliable, evolvable bridge from raw user-side events to higher-level reasoning in Airi.
+This repository does not try to solve all semantics inside the Minecraft client mod itself. Instead, it provides a reliable, evolvable bridge from raw user-side events to higher-level reasoning in the local telemetry and episode service and the AIRI desktop client.
 
 ## Project goals
 1. High-fidelity event streaming
@@ -19,7 +19,7 @@ Provide a low-latency, structured, reliable stream of user-side gameplay signals
 
 2. Better activity / intent inference
 
-Enable Airi Hub to distinguish between superficially similar actions with different meanings.
+Enable the local telemetry and episode service and the AIRI desktop client to distinguish between superficially similar actions with different meanings.
 
 Examples:
 
@@ -33,7 +33,7 @@ Examples:
 
 3. Preserve semantic flexibility
 
-Keep the mod focused on evidence collection and light local interpretation, while allowing most semantics to evolve on the Hub side.
+Keep the Minecraft client mod focused on evidence collection and light local interpretation, while allowing broader semantics to evolve in the local telemetry and episode service and the AIRI desktop client.
 
 ## Roadmap
 ### Phase 1 — Minimal Reliable signal bridge
@@ -45,7 +45,7 @@ Keep the mod focused on evidence collection and light local interpretation, whil
 - derived features
 - event filtering model
 - context propagation model
-### Phase 3 - Hub-side behavior understanding
+### Phase 3 - Temporal behavior understanding
 - temporal aggregation model
 - online scorer & hysteresis model
 - iterate & evolve
@@ -54,7 +54,7 @@ Keep the mod focused on evidence collection and light local interpretation, whil
 
 This repository exists partly because these questions are interesting and still not fully solved:
 
-Where should semantics live: client, Hub, or both?
+Where should semantics live: Minecraft client mod, local telemetry and episode service, AIRI desktop client, or some combination?
 
 What is the minimal raw event set that still supports useful inference?
 
