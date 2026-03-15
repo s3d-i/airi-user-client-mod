@@ -12,6 +12,33 @@ That makes it a better place to collect the raw signals needed to answer questio
 
 This repository does not try to solve all semantics inside the Minecraft client mod itself. Instead, it provides a reliable, evolvable bridge from raw user-side events to higher-level reasoning in the local telemetry and episode service and the AIRI desktop client.
 
+## Current experiment
+
+This repository now includes a minimal Fabric client mod experiment targeting Minecraft `1.21.1`.
+
+Current stack:
+
+- Gradle `9.2.1`
+- Fabric Loom `1.15.4`
+- Fabric Loader `0.18.4`
+- Yarn mappings `1.21.1+build.3`
+- Fabric API `0.116.9+1.21.1`
+- Java `21`
+
+What it does right now:
+
+- samples a small set of client-side observation data every 10 client ticks
+- emits those samples into a tiny bounded in-memory store
+- appends the latest emitted values directly into the vanilla debug HUD panel
+
+To try it:
+
+```sh
+./gradlew runClient
+```
+
+Once the client is in a world, press `F3`. You should see an `[AIRI] observation emit` block in the left debug panel with the latest sampled position, velocity, dimension, target, FPS, and buffer state.
+
 ## Project goals
 1. High-fidelity event streaming
 

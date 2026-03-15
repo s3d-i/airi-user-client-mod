@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "airi_user_client_mod",
+  "version": "${version}",
+  "name": "AIRI User Client Mod",
+  "description": "Minimal experimental Fabric client mod for observing local gameplay signals and surfacing them in the debug HUD.",
+  "authors": [
+    "OpenAI Codex"
+  ],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "io.github.airi.clientmod.AiriUserClientModClient"
+    ]
+  },
+  "mixins": [
+    {
+      "config": "airi_user_client_mod.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=0.18.4",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
+
