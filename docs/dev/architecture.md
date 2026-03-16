@@ -56,6 +56,31 @@ At a high level, the Minecraft client mod and the local telemetry and episode se
 
 Broader, slower, and more evolvable interpretation should remain outside the capture layer rather than being forced into the Minecraft client mod.
 
+## Version Support
+
+The repository can start single-version without committing to staying that way.
+
+If it later supports multiple Minecraft versions such as `1.20.1` and `1.21.1`, the default direction is:
+
+- monorepo
+- one coordinated release that publishes one artifact per supported Minecraft version
+- one shared version-neutral core module plus one thin Fabric adapter module per supported version
+
+Put in shared core:
+
+- domain event, sample, projection, detector, replay types, etc
+- logic that only depends on shared domain types
+- transport-independent shaping and small adapter interfaces
+
+Keep per-version:
+
+- Loom coordinates and dependency versions
+- `fabric.mod.json` and similar metadata
+- mixins, entrypoints, and direct `net.minecraft.*` or Fabric API usage
+- adapters that translate live Minecraft state into shared core types
+
+Do not let shared core depend on Yarn-named classes, mixin targets, or other version-locked game APIs.
+
 ## Main Layers
 
 ### 1. Interaction Event Stream

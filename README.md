@@ -16,6 +16,8 @@ This repository does not try to solve all semantics inside the Minecraft client 
 
 This repository now includes a minimal Fabric client mod experiment targeting Minecraft `1.21.1`.
 
+If the project later supports multiple Minecraft versions, the default direction is one repository and one release flow that builds separate per-version artifacts from a shared core plus thin version-specific Fabric adapters.
+
 Current stack:
 
 - Gradle `9.2.1`
