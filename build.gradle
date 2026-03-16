@@ -12,6 +12,7 @@ base {
 
 repositories {
 	// Loom adds the core Fabric and Minecraft repositories automatically.
+	mavenCentral()
 }
 
 loom {
@@ -30,6 +31,28 @@ dependencies {
 	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
 	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+	clientImplementation platform("io.opentelemetry:opentelemetry-bom:1.60.1")
+	clientImplementation "io.opentelemetry:opentelemetry-api"
+	clientImplementation "io.opentelemetry:opentelemetry-sdk"
+	clientImplementation "io.opentelemetry:opentelemetry-exporter-logging"
+}
+
+def clientRuntimeSystemProperties = [
+	"airi.transport.ws.uri",
+	"airi.otel.enabled",
+	"airi.otel.metrics.exporter",
+	"airi.otel.metrics.export.interval.millis",
+	"airi.otel.service.name"
+]
+
+tasks.named("runClient").configure {
+	clientRuntimeSystemProperties.each { propertyName ->
+		String value = System.getProperty(propertyName)
+		if (value != null) {
+			systemProperty(propertyName, value)
+		}
+	}
 }
 
 processResources {
@@ -74,4 +97,3 @@ publishing {
 	repositories {
 	}
 }
-

@@ -17,7 +17,7 @@ import io.github.airi.clientmod.observation.ObservationSample;
 public final class WebSocketObservationSink implements ObservationEmitter {
 	private static final String WS_URI_PROPERTY = "airi.transport.ws.uri";
 	private static final String DEFAULT_WS_URI = "ws://127.0.0.1:8787/ws";
-	private static final int MAX_QUEUE_DEPTH = 128;
+	public static final int MAX_QUEUE_DEPTH = 128;
 	private static final long INITIAL_RECONNECT_BACKOFF_MILLIS = 1000L;
 	private static final long MAX_RECONNECT_BACKOFF_MILLIS = 30000L;
 
@@ -34,6 +34,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	private boolean connectInFlight;
 	private boolean reconnectScheduled;
 	private boolean sendInFlight;
+	private long connectAttemptStartedAtMillis;
 	private long nextReconnectBackoffMillis = INITIAL_RECONNECT_BACKOFF_MILLIS;
 
 	public WebSocketObservationSink(TransportStatusStore statusStore) {
@@ -67,6 +68,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		synchronized (this) {
 			if (webSocket == null && !connectInFlight && !reconnectScheduled) {
 				connectInFlight = true;
+				connectAttemptStartedAtMillis = System.currentTimeMillis();
 				shouldConnect = true;
 			}
 		}
@@ -75,8 +77,9 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			return;
 		}
 
-		statusStore.markConnecting();
-		telemetry.onStateChanged(TransportConnectionState.CONNECTING);
+		TransportStateTransition transition = statusStore.markConnecting();
+		telemetry.onConnectAttemptStarted();
+		telemetry.onStateChanged(transition);
 
 		httpClient.newWebSocketBuilder()
 			.buildAsync(endpointUri, new Listener())
@@ -143,8 +146,13 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	private void handleConnectionFailure(Throwable error, boolean fromConnectPhase) {
 		String message = summarize(error);
 		boolean shouldScheduleReconnect = false;
+		long connectDurationMillis = -1L;
 
 		synchronized (this) {
+			if (fromConnectPhase && connectAttemptStartedAtMillis != 0L) {
+				connectDurationMillis = Math.max(0L, System.currentTimeMillis() - connectAttemptStartedAtMillis);
+			}
+			connectAttemptStartedAtMillis = 0L;
 			connectInFlight = false;
 			sendInFlight = false;
 
@@ -163,13 +171,17 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		}
 
 		statusStore.recordFailure(message);
-		telemetry.onConnectionFailure(message);
+		telemetry.onConnectionFailure(fromConnectPhase ? "connect" : "send", error, connectDurationMillis);
 
 		if (!shouldScheduleReconnect) {
 			return;
 		}
 
-		long backoffMillis = reserveReconnectBackoff(message);
+		long backoffMillis = reserveReconnectBackoff();
+		TransportStateTransition transition = statusStore.markBackoff(backoffMillis, message);
+		telemetry.onStateChanged(transition);
+		telemetry.onReconnectScheduled(backoffMillis);
+
 		if (fromConnectPhase) {
 			AiriUserClientMod.LOGGER.warn("Observation websocket connect failed: {}", message);
 		} else {
@@ -184,31 +196,34 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		}, backoffMillis, TimeUnit.MILLISECONDS);
 	}
 
-	private long reserveReconnectBackoff(String message) {
+	private long reserveReconnectBackoff() {
 		long backoffMillis;
-		long reconnectCount;
 
 		synchronized (this) {
 			backoffMillis = nextReconnectBackoffMillis;
 			nextReconnectBackoffMillis = Math.min(nextReconnectBackoffMillis * 2L, MAX_RECONNECT_BACKOFF_MILLIS);
 		}
 
-		reconnectCount = statusStore.markBackoff(backoffMillis, message);
-		telemetry.onStateChanged(TransportConnectionState.BACKOFF);
-		telemetry.onReconnectScheduled(reconnectCount, backoffMillis);
 		return backoffMillis;
 	}
 
 	private void handleOpen(WebSocket socket) {
+		long connectDurationMillis = -1L;
+
 		synchronized (this) {
+			if (connectAttemptStartedAtMillis != 0L) {
+				connectDurationMillis = Math.max(0L, System.currentTimeMillis() - connectAttemptStartedAtMillis);
+			}
+			connectAttemptStartedAtMillis = 0L;
 			webSocket = socket;
 			connectInFlight = false;
 			sendInFlight = false;
 			nextReconnectBackoffMillis = INITIAL_RECONNECT_BACKOFF_MILLIS;
 		}
 
-		statusStore.markOpen();
-		telemetry.onStateChanged(TransportConnectionState.OPEN);
+		TransportStateTransition transition = statusStore.markOpen();
+		telemetry.onStateChanged(transition);
+		telemetry.onConnectionOpened(connectDurationMillis);
 		AiriUserClientMod.LOGGER.info("Observation websocket connected to {}", endpointUri);
 		drainQueue();
 	}
@@ -227,11 +242,16 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			}
 		}
 
+		telemetry.onConnectionClosed(statusCode);
+
 		if (!shouldReconnect) {
 			return;
 		}
 
-		long backoffMillis = reserveReconnectBackoff(closeReason);
+		long backoffMillis = reserveReconnectBackoff();
+		TransportStateTransition transition = statusStore.markBackoff(backoffMillis, closeReason);
+		telemetry.onStateChanged(transition);
+		telemetry.onReconnectScheduled(backoffMillis);
 		AiriUserClientMod.LOGGER.warn("Observation websocket disconnected: {}", closeReason);
 
 		reconnectExecutor.schedule(() -> {

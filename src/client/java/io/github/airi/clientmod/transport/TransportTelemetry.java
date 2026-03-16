@@ -4,7 +4,10 @@ public interface TransportTelemetry {
 	TransportTelemetry NOOP = new TransportTelemetry() {
 	};
 
-	default void onStateChanged(TransportConnectionState state) {
+	default void onConnectAttemptStarted() {
+	}
+
+	default void onStateChanged(TransportStateTransition transition) {
 	}
 
 	default void onQueueDepthChanged(int queueDepth) {
@@ -16,9 +19,15 @@ public interface TransportTelemetry {
 	default void onMessageSent(long sentCount, long latencyMillis, int queueDepth) {
 	}
 
-	default void onReconnectScheduled(long reconnectCount, long backoffMillis) {
+	default void onConnectionOpened(long connectDurationMillis) {
 	}
 
-	default void onConnectionFailure(String message) {
+	default void onConnectionClosed(int statusCode) {
+	}
+
+	default void onReconnectScheduled(long backoffMillis) {
+	}
+
+	default void onConnectionFailure(String phase, Throwable error, long connectDurationMillis) {
 	}
 }

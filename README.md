@@ -41,6 +41,18 @@ To try it:
 
 Once the client is in a world, press `F3`. You should see an `[AIRI] observation emit` block in the left debug panel with the latest sampled position, velocity, dimension, target, FPS, and buffer state.
 
+For local websocket transport and console-exported OTel metrics, the `runClient` task now forwards selected JVM properties into the client runtime. Example:
+
+```sh
+./gradlew runClient \
+  -Dairi.transport.ws.uri=ws://127.0.0.1:8787/ws \
+  -Dairi.otel.enabled=true \
+  -Dairi.otel.metrics.exporter=console \
+  -Dairi.otel.metrics.export.interval.millis=5000
+```
+
+The current OTel wiring is intentionally limited to transport metrics such as queue depth, reconnects, send latency, drops, and failures. Gameplay-facing observations still live in the project's own domain model and debug HUD.
+
 ## Project goals
 1. High-fidelity event streaming
 
