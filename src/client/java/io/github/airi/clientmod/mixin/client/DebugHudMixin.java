@@ -15,10 +15,12 @@ public abstract class DebugHudMixin {
 	@Inject(method = "getLeftText", at = @At("RETURN"), cancellable = true)
 	private void airi$appendObservationPanel(CallbackInfoReturnable<List<String>> cir) {
 		List<String> baseLines = cir.getReturnValue();
-		List<String> mergedLines = new ArrayList<>(baseLines.size() + 10);
+		List<String> mergedLines = new ArrayList<>(baseLines.size() + 18);
 		mergedLines.addAll(baseLines);
 		mergedLines.add("");
 		mergedLines.addAll(AiriUserClientModClient.getDebugStore().buildPanelLines());
+		mergedLines.add("");
+		mergedLines.addAll(AiriUserClientModClient.getTransportStatusStore().buildPanelLines());
 		cir.setReturnValue(mergedLines);
 	}
 }
