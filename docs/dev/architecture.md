@@ -184,6 +184,14 @@ The protocol and integration details can evolve. The main architectural principl
 
 capture code should not know transport policy, retry policy, or downstream semantics.
 
+In practical terms, the default target shape should be a local TypeScript websocket service:
+
+`Minecraft client mod -> local TypeScript websocket service -> blackboard/scorer/episode/observability -> AIRI protocol bridge`
+
+The client mod should publish one raw trace stream to that hub. It should not own multi-consumer fanout or implement downstream service-specific websocket contracts directly.
+
+That hub boundary is the right place to compose scorer, blackboard, episode, OTel, replay, and the bridge into AIRI's main service protocol stack rather than coupling capture transport to any single downstream runtime.
+
 ### 6. Debug And Observability Surfaces
 
 Debugging and observability are first-class, not optional extras.

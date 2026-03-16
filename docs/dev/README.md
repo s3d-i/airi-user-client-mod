@@ -16,6 +16,8 @@ The main idea to keep in mind is simple:
   Explains the intended runtime shape of the project, the major layers, and where different kinds of logic should live.
 - [Guardrails](./guardrails.md)
   Captures the golden "what to do" and "what not to do" rules for contributors.
+- [Transport Hub](./transport-hub.md)
+  Explains why the mod should publish a trace stream into a local TypeScript websocket service instead of owning downstream fanout and service integration itself.
 
 If you only read two documents before making architectural changes, read `architecture.md` first and `guardrails.md` second.
 
