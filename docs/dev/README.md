@@ -1,56 +1,43 @@
-# Developer Guidance
+# Developer Docs
 
-This directory contains the high-level design guidance for `airi-user-client-mod`.
+This directory contains the design guidance for `airi-user-client-mod`.
 
-These documents are intentionally about design intent, boundaries, and contribution direction. They are not detailed contracts, wire-format specifications, or low-level implementation notes.
+The docs are intentionally split into two kinds:
 
-They should be read as architectural guidance and contribution norms.
+- current branch reality
+- target architecture direction
 
-The main idea to keep in mind is simple:
+That split matters because this branch is still a Java-first Fabric experiment, while the intended main-branch direction is a broader capture-plus-hub architecture.
 
-`airi-user-client-mod` is the local gameplay-observation pipeline around AIRI. It includes a Minecraft client mod for high-fidelity capture and a local telemetry and episode service for downstream ingestion and derived outputs. It is not the full AIRI behavior engine.
+## Read Order
 
-## Documents
+Read these in this order:
+
+1. [Current Branch State](./current-state.md)
+2. [Architecture](./architecture.md)
+3. [Transport Hub](./transport-hub.md)
+4. [Capture Event Taxonomy](./capture-event-taxonomy.md)
+5. [Guardrails](./guardrails.md)
+
+## What Each Doc Is For
+
+- [Current Branch State](./current-state.md)
+  Describes what is actually implemented in this branch today.
 
 - [Architecture](./architecture.md)
-  Explains the intended runtime shape of the project, the major layers, and where different kinds of logic should live.
-- [Guardrails](./guardrails.md)
-  Captures the golden "what to do" and "what not to do" rules for contributors.
+  Describes the target system shape and the major layers.
+
 - [Transport Hub](./transport-hub.md)
-  Explains why the mod should publish a trace stream into a local TypeScript websocket service instead of owning downstream fanout and service integration itself.
-- [Core Capture Event Taxonomy](./capture-event-taxonomy.md)
-  Defines the working raw event family list the client mod should grow toward for gameplay-facing evidence capture.
+  Defines the intended boundary between the Minecraft mod and the local TypeScript hub.
 
-If you only read two documents before making architectural changes, read `architecture.md` first and `guardrails.md` second.
+- [Capture Event Taxonomy](./capture-event-taxonomy.md)
+  Defines the raw gameplay-facing event families the capture layer should grow toward.
 
-## Intended Audience
-
-These docs are for contributors who need to answer questions such as:
-
-- What kind of project is this mod supposed to become?
-- What belongs in the Minecraft client mod, what belongs in the local telemetry and episode service, and what should remain in the AIRI desktop client?
-- How should event capture, blackboard state, detectors, episodes, transport, and debugging fit together?
-- What kinds of contributions move the project in the right direction, and what kinds create long-term confusion?
+- [Guardrails](./guardrails.md)
+  Lists the contribution rules that keep the project aligned while implementation changes.
 
 ## Scope
 
-These docs focus on:
+These docs are guidance, not frozen contracts.
 
-- architecture direction
-- reasoning boundaries
-- semantics boundaries
-- replay and inspectability expectations
-- performance and observability intent
-
-These docs do not try to define:
-
-- an exact frozen payload schema for every event
-- the final replay artifact model
-- final protocol contracts
-- the final episode export representation
-- final package names
-- exact implementation classes
-
-Those details can evolve. The design intent in this directory should remain much more stable.
-
-`capture-event-taxonomy.md` is the working exception: it defines the core raw event families the client should capture, but it still does not freeze the wire contract field by field.
+They should be precise about boundaries and responsibilities, but they do not attempt to freeze every class name, payload field, or package layout ahead of implementation.

@@ -1,37 +1,37 @@
 # airi-user-client-mod
 
-airi-user-client-mod is the local gameplay-observation pipeline around AIRI. Its intended runtime includes a Minecraft client mod for high-fidelity capture, a local telemetry and episode service for ingestion and derived outputs, and the AIRI desktop client as the downstream consumer.
+`airi-user-client-mod` is the local gameplay-observation experiment around AIRI.
 
-Unlike a pure bot-side integration, this project is designed around a simple observation: the Minecraft client mod sees the world earlier, more directly, and with less ambiguity than an external agent ever can.
+This branch is a capture-first Fabric mod prototype. It is useful as a concrete reference for what has already been implemented, but it is not yet the full multi-version, TypeScript-hub-centered architecture intended for main.
 
-That makes it a better place to collect the raw signals needed to answer questions like:
-- What is the player doing right now?
-- Are they mining, navigating, building, fighting, looting, or just looking around?
-- Is a block break part of path clearing, resource gathering, or construction?
-- Is the player focused, idle, interrupted, under attack, or transitioning between goals?
+## Current Branch Status
 
-This repository does not try to solve all semantics inside the Minecraft client mod itself. Instead, it provides a reliable, evolvable bridge from raw user-side events to higher-level reasoning in the local telemetry and episode service and the AIRI desktop client.
+Today this repository is:
 
-## Current experiment
+- a single Gradle/Fabric project
+- targeted at Minecraft `1.21.1`
+- Java `21` only
+- centered on a Fabric client mod experiment
 
-This repository now includes a minimal Fabric client mod experiment targeting Minecraft `1.21.1`.
+Today this repository is not:
 
-If the project later supports multiple Minecraft versions, the default direction is one repository and one release flow that builds separate per-version artifacts from a shared core plus thin version-specific Fabric adapters.
+- a multi-version workspace
+- split into shared core plus version-specific adapters
+- a mixed Java and TypeScript monorepo
+- backed by a local TypeScript websocket hub in-repo
 
-Current stack:
+The most important current branch fact is simple:
 
-- Gradle `9.2.1`
-- Fabric Loom `1.15.4`
-- Fabric Loader `0.18.4`
-- Yarn mappings `1.21.1+build.3`
-- Fabric API `0.116.9+1.21.1`
-- Java `21`
+the Java client mod still owns capture, local debug output, websocket transport, reconnect policy, queueing, and transport telemetry.
 
-What it does right now:
+## What Works Today
 
-- samples a small set of client-side observation data every 10 client ticks
-- emits those samples into a tiny bounded in-memory store
-- appends the latest emitted values directly into the vanilla debug HUD panel
+The current experiment does four concrete things:
+
+- samples a small observation payload every 10 client ticks
+- stores recent samples for local inspection
+- renders the latest observation state into the vanilla debug HUD
+- optionally publishes those samples over websocket and exports transport OTel metrics
 
 To try it:
 
@@ -39,9 +39,7 @@ To try it:
 ./gradlew runClient
 ```
 
-Once the client is in a world, press `F3`. You should see an `[AIRI] observation emit` block in the left debug panel with the latest sampled position, velocity, dimension, target, FPS, and buffer state.
-
-For local websocket transport and console-exported OTel metrics, the `runClient` task now forwards selected JVM properties into the client runtime. Example:
+To forward websocket transport and console-exported transport metrics into the client runtime:
 
 ```sh
 ./gradlew runClient \
@@ -51,60 +49,26 @@ For local websocket transport and console-exported OTel metrics, the `runClient`
   -Dairi.otel.metrics.export.interval.millis=5000
 ```
 
-The current OTel wiring is intentionally limited to transport metrics such as queue depth, reconnects, send latency, drops, and failures. Gameplay-facing observations still live in the project's own domain model and debug HUD.
+Once the client is in a world, press `F3`. The left debug panel should show an `[AIRI] observation emit` block with the latest sampled values and transport state.
 
-## Project goals
-1. High-fidelity event streaming
+## Docs
 
-Provide a low-latency, structured, reliable stream of user-side gameplay signals.
+The docs are split between current branch reality and target architecture:
 
-2. Better activity / intent inference
+- [Current Branch State](./docs/dev/current-state.md)
+- [Architecture](./docs/dev/architecture.md)
+- [Transport Hub](./docs/dev/transport-hub.md)
+- [Capture Event Taxonomy](./docs/dev/capture-event-taxonomy.md)
+- [Guardrails](./docs/dev/guardrails.md)
 
-Enable the local telemetry and episode service and the AIRI desktop client to distinguish between superficially similar actions with different meanings.
+Read `current-state.md` first if you want to understand the code that actually exists in this branch.
 
-Examples:
+## Direction For Main
 
-- breaking a log while gathering wood
+The intended main-branch direction is:
 
-- breaking a block to clear path obstruction
-
-- breaking a block as part of building replacement
-
-- opening inventory to craft vs reorganize vs inspect resources
-
-3. Preserve semantic flexibility
-
-Keep the Minecraft client mod focused on evidence collection and light local interpretation, while allowing broader semantics to evolve in the local telemetry and episode service and the AIRI desktop client.
-
-## Roadmap
-### Phase 1 — Minimal Reliable signal bridge
-- Fabric mod bootstrap
-- basic event capture
-- session model & transport protocol
-- instrumentation
-### Phase 2 — Structured activity evidence
-- derived features
-- event filtering model
-- context propagation model
-### Phase 3 - Temporal behavior understanding
-- temporal aggregation model
-- online scorer & hysteresis model
-- iterate & evolve
-
-## Open questions
-
-This repository exists partly because these questions are interesting and still not fully solved:
-
-Where should semantics live: Minecraft client mod, local telemetry and episode service, AIRI desktop client, or some combination?
-
-What is the minimal raw event set that still supports useful inference?
-
-How much local feature extraction is worth the complexity?
-
-Which events need exact fidelity, and which can be sampled?
-
-How should inferred activities be represented: rules, scores, sequence models, hybrids?
-
-How do we distinguish intention from mere motion?
-
-How do we keep the system inspectable as it becomes smarter?
+- add a local TypeScript trace hub to this repository
+- move blackboard, scorer, episode, replay, and AIRI bridge logic behind that hub boundary
+- keep the Minecraft mod focused on evidence capture and trace publish
+- split Java into a shared version-neutral core plus thin per-version Fabric adapters
+- support coordinated releases for multiple Minecraft versions from one repository
