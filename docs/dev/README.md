@@ -18,6 +18,8 @@ The main idea to keep in mind is simple:
   Captures the golden "what to do" and "what not to do" rules for contributors.
 - [Transport Hub](./transport-hub.md)
   Explains why the mod should publish a trace stream into a local TypeScript websocket service instead of owning downstream fanout and service integration itself.
+- [Core Capture Event Taxonomy](./capture-event-taxonomy.md)
+  Defines the working raw event family list the client mod should grow toward for gameplay-facing evidence capture.
 
 If you only read two documents before making architectural changes, read `architecture.md` first and `guardrails.md` second.
 
@@ -42,8 +44,7 @@ These docs focus on:
 
 These docs do not try to define:
 
-- every event name
-- exact payload schemas
+- an exact frozen payload schema for every event
 - the final replay artifact model
 - final protocol contracts
 - the final episode export representation
@@ -51,3 +52,5 @@ These docs do not try to define:
 - exact implementation classes
 
 Those details can evolve. The design intent in this directory should remain much more stable.
+
+`capture-event-taxonomy.md` is the working exception: it defines the core raw event families the client should capture, but it still does not freeze the wire contract field by field.
