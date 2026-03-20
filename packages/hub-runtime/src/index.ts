@@ -1,8 +1,19 @@
 import type { HubLogger } from "./logging/index.js";
-import type { ProjectionState } from "./projection/index.js";
+import {
+  createInitialEpisodeMachineState,
+  stepEpisodeMachine,
+  type EpisodeMachineState,
+  type EpisodeOutput
+} from "./episode/index.js";
+import { evaluateDetectors, type DetectorSnapshot, type DetectorSignal } from "./detector/index.js";
+import {
+  createEmptyProjectionSnapshot,
+  reduceProjectionSnapshot,
+  type ProjectionSnapshot
+} from "./projection/index.js";
 import type { ObservationSampleTraceEvent, RawTraceEvent } from "./trace/index.js";
 
-export type { DetectorSignal } from "./detector/index.js";
+export type { DetectorSignal, DetectorSnapshot } from "./detector/index.js";
 export type { EpisodeOutput } from "./episode/index.js";
 export type {
   HubLogEntry,
@@ -12,30 +23,79 @@ export type {
   HubLogSink,
   HubLogLevel
 } from "./logging/index.js";
-export type { ProjectionState } from "./projection/index.js";
+export type {
+  AggregatedItemDelta,
+  ContinuityProjectionSnapshot,
+  FocusProjectionSnapshot,
+  HandProjectionSnapshot,
+  InteractionWindowProjectionSnapshot,
+  InventoryDeltaProjectionSnapshot,
+  MotionProjectionSnapshot,
+  ProjectionSnapshot,
+  ResourceCategoryCountMap
+} from "./projection/index.js";
 export type {
   CurrentModObservationSampleTraceEvent,
   CurrentModObservationSampleTracePayload,
   CurrentModTraceEvent,
+  InteractionBlockBreakTraceEvent,
+  InteractionBlockBreakTracePayload,
+  InventoryTransactionTraceEvent,
+  InventoryTransactionTracePayload,
   ObservationSampleTraceEvent,
   ObservationSampleTracePayload,
+  PlayerHandStateChangedTraceEvent,
+  PlayerHandStateChangedTracePayload,
+  PlayerLookTargetChangedTraceEvent,
+  PlayerLookTargetChangedTracePayload,
+  PlayerSelectedSlotChangedTraceEvent,
+  PlayerSelectedSlotChangedTracePayload,
   RawTraceDecodeFailure,
   RawTraceDecodeResult,
   RawTraceDecodeSuccess,
-  RawTraceEvent
+  RawTraceEvent,
+  TraceBlockFace,
+  TraceBlockPosition,
+  TraceEvidenceRef,
+  TraceHandType,
+  TraceInventorySlotDelta,
+  TraceItemStackSnapshot,
+  TraceLookTarget,
+  TraceLookTargetBlockDetails,
+  TraceLookTargetEntityDetails,
+  TraceTargetKind
 } from "./trace/index.js";
 export {
+  createRawTraceId,
   CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE,
+  CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK,
+  CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION,
+  CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED,
+  CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED,
+  CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED,
   CURRENT_MOD_TRACE_VERSION,
-  decodeCurrentModTraceEvent
+  decodeCurrentModTraceEvent,
+  toTraceEvidenceRef
 } from "./trace/index.js";
 
 export interface HubTraceSink {
   acceptTrace(event: RawTraceEvent): void;
 }
 
+export interface HubRuntimeSnapshot {
+  readonly traceCount: number;
+  readonly latestObservation?: ObservationSampleTraceEvent;
+  readonly latestTrace?: RawTraceEvent;
+  readonly lastAcceptedAt?: number;
+  readonly projections: ProjectionSnapshot;
+  readonly detectors: DetectorSnapshot;
+  readonly episodes: EpisodeOutput;
+}
+
+export type ProjectionState = HubRuntimeSnapshot;
+
 export interface HubRuntime extends HubTraceSink {
-  snapshot(): ProjectionState;
+  snapshot(): HubRuntimeSnapshot;
 }
 
 export interface CreateHubRuntimeOptions {
@@ -46,25 +106,48 @@ export function createHubRuntime(options: CreateHubRuntimeOptions): HubRuntime {
   const { logger } = options;
   let traceCount = 0;
   let latestObservation: ObservationSampleTraceEvent | undefined;
+  let latestTrace: RawTraceEvent | undefined;
   let lastAcceptedAt: number | undefined;
+  let projections = createEmptyProjectionSnapshot();
+  let detectors = evaluateDetectors(projections);
+  let episodeState: EpisodeMachineState = createInitialEpisodeMachineState();
 
   return {
     acceptTrace(event) {
       traceCount += 1;
-      latestObservation = event;
+      latestTrace = event;
+
+      if (event.kind === "observation.sample") {
+        latestObservation = event;
+      }
+
+      projections = reduceProjectionSnapshot(projections, event);
+      detectors = evaluateDetectors(projections);
+      episodeState = stepEpisodeMachine(episodeState, {
+        event,
+        projections,
+        detectors
+      });
       lastAcceptedAt = Date.now();
       logger.debug("accepted trace", {
         kind: event.kind,
         seq: event.seq,
         sessionId: event.sessionId,
-        traceCount
+        traceCount,
+        woodEpisodeState: episodeState.output.woodGathering.state,
+        woodSupportScore: detectors.composites.woodGatheringSupport.score
       });
     },
     snapshot() {
       return {
         traceCount,
         latestObservation,
+        latestTrace,
         lastAcceptedAt
+        ,
+        projections,
+        detectors,
+        episodes: episodeState.output
       };
     }
   };

@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
     "clean": "rimraf dist",
+    "test": "pnpm run build && node --test dist/**/*.test.js",
     "typecheck": "tsc --project tsconfig.json"
   },
   "main": "./dist/index.js",
