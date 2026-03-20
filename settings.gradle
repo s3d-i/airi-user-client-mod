@@ -14,4 +14,5 @@ plugins {
 }
 
 rootProject.name = 'airi-user-client-mod'
-
+include(':v1_21_1')
+project(':v1_21_1').projectDir = file('1.21.1')

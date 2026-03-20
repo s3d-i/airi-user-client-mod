@@ -10,9 +10,10 @@ Read this alongside the design docs in [`../design/`](../design/README.md). The 
 
 Today the repository is:
 
-- one Gradle/Fabric project
+- one Gradle multi-project build
 - one Minecraft target: `1.21.1`
 - one Java toolchain target: `21`
+- one real version module today: `:v1_21_1` in `1.21.1/`
 - one mod artifact
 
 Today the repository does not contain:
@@ -22,6 +23,8 @@ Today the repository does not contain:
 - a local TypeScript websocket hub
 - a shared core module split out from version-specific Fabric adapters
 - a multi-version release layout
+
+The root project is now an aggregator and shared-conventions layer. Behavior is otherwise unchanged.
 
 ## How To Run It
 

@@ -1,0 +1,91 @@
+plugins {
+	id 'net.fabricmc.fabric-loom-remap' version "${loom_version}"
+	id 'maven-publish'
+}
+
+base {
+	archivesName = "${project.archives_base_name}-1.21.1"
+}
+
+loom {
+	splitEnvironmentSourceSets()
+
+	mods {
+		"airi_user_client_mod" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+	clientImplementation platform("io.opentelemetry:opentelemetry-bom:1.60.1")
+	clientImplementation "io.opentelemetry:opentelemetry-api"
+	clientImplementation "io.opentelemetry:opentelemetry-sdk"
+	clientImplementation "io.opentelemetry:opentelemetry-exporter-logging"
+}
+
+def clientRuntimeSystemProperties = [
+	"airi.transport.ws.uri",
+	"airi.otel.enabled",
+	"airi.otel.metrics.exporter",
+	"airi.otel.metrics.export.interval.millis",
+	"airi.otel.service.name"
+]
+
+tasks.named("runClient").configure {
+	clientRuntimeSystemProperties.each { propertyName ->
+		String value = System.getProperty(propertyName)
+		if (value != null) {
+			systemProperty(propertyName, value)
+		}
+	}
+}
+
+processResources {
+	inputs.property "version", project.version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": inputs.properties.version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 21
+}
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(21)
+	}
+
+	withSourcesJar()
+
+	sourceCompatibility = JavaVersion.VERSION_21
+	targetCompatibility = JavaVersion.VERSION_21
+}
+
+jar {
+	inputs.property "archivesName", project.base.archivesName
+
+	from(rootProject.file("LICENSE")) {
+		rename { "${it}_${inputs.properties.archivesName}" }
+	}
+}
+
+publishing {
+	publications {
+		create("mavenJava", MavenPublication) {
+			artifactId = project.base.archivesName.get()
+			from components.java
+		}
+	}
+
+	repositories {
+	}
+}
