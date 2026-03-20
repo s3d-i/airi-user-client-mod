@@ -1,0 +1,14 @@
+{
+  "name": "@airi/local-hub",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@airi/airi-ws-bridge": "workspace:*",
+    "@airi/hub-ingress-ws": "workspace:*",
+    "@airi/hub-runtime": "workspace:*"
+  }
+}
