@@ -170,6 +170,8 @@ h2 {
 
 .panel--ingress,
 .panel--snapshot,
+.panel--wood,
+.panel--detectors,
 .panel--traces,
 .panel--logs {
   padding: 1.25rem;
@@ -327,6 +329,8 @@ h2 {
   .panel--hero,
   .panel--ingress,
   .panel--snapshot,
+  .panel--wood,
+  .panel--detectors,
   .panel--traces,
   .panel--logs {
     padding: 1rem;

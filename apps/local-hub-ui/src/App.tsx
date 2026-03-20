@@ -1,6 +1,7 @@
 import { startTransition, useEffect, useMemo, useState } from "react";
 
 import type { HubDebugState } from "@airi-client-mod/hub-debug-surface";
+import type { RawTraceEvent, TraceItemStackSnapshot, TraceLookTarget } from "@airi-client-mod/hub-runtime";
 
 import { fetchDebugState, openDebugStateFeed, resolveDebugSurfaceBaseUrl } from "./api.js";
 
@@ -146,7 +147,7 @@ export function App() {
         </article>
 
         <article className="panel panel--snapshot">
-          <PanelTitle title="Runtime Snapshot" subtitle="Minimal current-state projection from hub-runtime" />
+          <PanelTitle title="Runtime Snapshot" subtitle="Derived evidence, detector support, and episode state from hub-runtime" />
           {state == null ? (
             <EmptyState />
           ) : (
@@ -158,12 +159,12 @@ export function App() {
                   value={formatTimestamp(state.runtime.lastAcceptedAt)}
                 />
                 <Stat
-                  label="Dimension"
-                  value={state.runtime.latestObservation?.payload.dimensionKey ?? "n/a"}
+                  label="Latest Trace"
+                  value={state.runtime.latestTrace?.kind ?? "n/a"}
                 />
                 <Stat
-                  label="Target"
-                  value={state.runtime.latestObservation?.payload.targetDescription ?? "n/a"}
+                  label="Episode"
+                  value={state.runtime.episodes.woodGathering.state}
                   wide={true}
                 />
               </dl>
@@ -202,6 +203,107 @@ export function App() {
           )}
         </article>
 
+        <article className="panel panel--wood">
+          <PanelTitle title="Wood Evidence" subtitle="Bounded reusable projections over the recent trace stream" />
+          {state == null ? (
+            <EmptyState />
+          ) : (
+            <>
+              <dl className="stats">
+                <Stat label="Focus" value={formatTarget(state.runtime.projections.focus.currentTarget)} />
+                <Stat
+                  label="Focus Dwell"
+                  value={`${state.runtime.projections.focus.targetDwellMillis} ms`}
+                />
+                <Stat
+                  label="Main Hand"
+                  value={formatItemStack(state.runtime.projections.hand.mainHand)}
+                />
+                <Stat
+                  label="Tool"
+                  value={state.runtime.projections.hand.mainHandToolCategory ?? "n/a"}
+                />
+                <Stat
+                  label="Motion"
+                  value={state.runtime.projections.motion.movementState}
+                />
+                <Stat
+                  label="Wood Breaks"
+                  value={String(state.runtime.projections.interactionWindow.recentBreaksByResourceCategory.wood ?? 0)}
+                />
+                <Stat
+                  label="Wood Gains"
+                  value={String(state.runtime.projections.inventoryDelta.recentGainsByResourceCategory.wood ?? 0)}
+                />
+                <Stat
+                  label="Continuity Reset"
+                  value={state.runtime.projections.continuity.lastResetReason ?? "none"}
+                />
+              </dl>
+              <div className="sample-card">
+                <div>
+                  <span className="sample-card__label">Latest Gain</span>
+                  <strong>
+                    {state.runtime.projections.inventoryDelta.recentGainedItems[0] == null
+                      ? "n/a"
+                      : `${state.runtime.projections.inventoryDelta.recentGainedItems[0].itemId} x${state.runtime.projections.inventoryDelta.recentGainedItems[0].count}`}
+                  </strong>
+                </div>
+                <div>
+                  <span className="sample-card__label">Latest Break</span>
+                  <strong>
+                    {state.runtime.projections.interactionWindow.recentBlockBreaks.at(-1)?.payload.block.blockId ??
+                      "n/a"}
+                  </strong>
+                </div>
+                <div>
+                  <span className="sample-card__label">Detector Score</span>
+                  <strong>{state.runtime.detectors.composites.woodGatheringSupport.score.toFixed(2)}</strong>
+                </div>
+              </div>
+            </>
+          )}
+        </article>
+
+        <article className="panel panel--detectors">
+          <PanelTitle title="Detector / Episode" subtitle="Explainable support plus the explicit wood-gathering state machine" />
+          {state == null ? (
+            <EmptyState />
+          ) : (
+            <div className="list">
+              <div className="list__row">
+                <div>
+                  <strong>{state.runtime.detectors.composites.woodGatheringSupport.label}</strong>
+                  <p>
+                    active: {state.runtime.detectors.composites.woodGatheringSupport.active ? "yes" : "no"} · score:{" "}
+                    {state.runtime.detectors.composites.woodGatheringSupport.score.toFixed(2)}
+                  </p>
+                </div>
+                <div className="list__meta">
+                  <span>{state.runtime.episodes.woodGathering.kind}</span>
+                  <span>{state.runtime.episodes.woodGathering.state}</span>
+                </div>
+              </div>
+              {state.runtime.episodes.woodGathering.evidenceSummary.length === 0 ? (
+                <EmptyState message="No wood-gathering evidence yet." />
+              ) : (
+                state.runtime.episodes.woodGathering.evidenceSummary.map(reason => (
+                  <div className="list__row" key={`${reason.code}-${reason.message}`}>
+                    <div>
+                      <strong>{reason.code}</strong>
+                      <p>{reason.message}</p>
+                    </div>
+                    <div className="list__meta">
+                      <span>{reason.contribution.toFixed(2)}</span>
+                      <span>{reason.traceIds.length === 0 ? "derived" : reason.traceIds.join(", ")}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </article>
+
         <article className="panel panel--traces">
           <PanelTitle title="Recent Traces" subtitle="Bounded in-memory retention owned by hub-trace-store" />
           {state == null ? (
@@ -215,14 +317,12 @@ export function App() {
                   <div>
                     <strong>{trace.traceId}</strong>
                     <p>
-                      {trace.event.kind} · {trace.event.payload.dimensionKey}
+                      {describeTraceSummary(trace.event)}
                     </p>
                   </div>
                   <div className="list__meta">
                     <span>{formatTimestamp(trace.retainedAtMillis)}</span>
-                    <span>
-                      {formatVec3(trace.event.payload.x, trace.event.payload.y, trace.event.payload.z)}
-                    </span>
+                    <span>{describeTraceDetail(trace.event)}</span>
                   </div>
                 </div>
               ))}
@@ -296,4 +396,56 @@ function formatTimestamp(value: number | undefined): string {
 
 function formatVec3(x: number, y: number, z: number): string {
   return `${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}`;
+}
+
+function formatItemStack(item: TraceItemStackSnapshot | undefined): string {
+  if (item == null || item.itemId == null) {
+    return "empty";
+  }
+
+  return `${item.itemId} x${item.count}`;
+}
+
+function formatTarget(target: TraceLookTarget | undefined): string {
+  if (target == null) {
+    return "n/a";
+  }
+
+  switch (target.kind) {
+    case "block":
+      return `${target.block?.blockId ?? "block"} @ ${formatBlockPosition(target.block?.position)}`;
+    case "entity":
+      return target.entity?.entityTypeId ?? "entity";
+    case "miss":
+      return "miss";
+    case "none":
+      return "none";
+  }
+}
+
+function describeTraceSummary(event: RawTraceEvent): string {
+  return `${event.kind} · ${event.payload.dimensionKey}`;
+}
+
+function describeTraceDetail(event: RawTraceEvent): string {
+  switch (event.kind) {
+    case "observation.sample":
+      return formatVec3(event.payload.x, event.payload.y, event.payload.z);
+    case "player.look.target.changed":
+      return formatTarget(event.payload.target);
+    case "player.selected_slot.changed":
+      return `slot ${event.payload.previousSelectedSlot} -> ${event.payload.selectedSlot}`;
+    case "player.hand_state.changed":
+      return formatItemStack(event.payload.mainHand);
+    case "interaction.block.break":
+      return `${event.payload.block.blockId} @ ${formatBlockPosition(event.payload.block.position)}`;
+    case "inventory.transaction":
+      return `${event.payload.changedSlots.length} slot change(s)`;
+  }
+}
+
+function formatBlockPosition(
+  position: { readonly x: number; readonly y: number; readonly z: number } | undefined
+): string {
+  return position == null ? "n/a" : `${position.x}, ${position.y}, ${position.z}`;
 }
