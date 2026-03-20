@@ -6,6 +6,9 @@ This document records what `dev/refactor-node` implements today.
 
 Read this alongside the design docs in [`../design/`](../design/README.md). The design docs describe the intended system shape; this document describes current implementation reality.
 
+The design docs under [`../design/`](../design/README.md) are currently not fully updated to the latest roadmap discussion.
+For the newest forward-looking design direction, treat [`../design/future-roadmap.md`](../design/future-roadmap.md) as the primary reference until the other design docs are revised.
+
 ## Repository Shape
 
 Today the repository is:
