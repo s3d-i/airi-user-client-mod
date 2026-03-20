@@ -14,7 +14,6 @@ import {
   CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED,
   type InteractionBlockBreakTraceEvent,
   type InventoryTransactionTraceEvent,
-  type ObservationSampleTraceEvent,
   type RawTraceEvent,
   type TraceItemStackSnapshot,
   type TraceLookTarget,
@@ -96,6 +95,8 @@ export interface ProjectionSnapshot {
   readonly inventoryDelta: InventoryDeltaProjectionSnapshot;
   readonly continuity: ContinuityProjectionSnapshot;
 }
+
+type PayloadTraceEvent = Extract<RawTraceEvent, { readonly payload: unknown }>;
 
 export function createEmptyProjectionSnapshot(): ProjectionSnapshot {
   return {
@@ -185,19 +186,20 @@ function reduceContinuityProjectionSnapshot(
   previous: ContinuityProjectionSnapshot,
   event: RawTraceEvent
 ): ContinuityProjectionSnapshot {
-  const dimensionKey = event.payload.dimensionKey;
+  const dimensionKey = getTraceDimensionKey(event);
   let nextResetCount = previous.resetCount;
   let lastResetAtMillis = previous.lastResetAtMillis;
   let lastResetReason = previous.lastResetReason;
-
-  if (
+  const didSessionChange =
     previous.currentSessionId != null &&
-    previous.currentSessionId !== event.sessionId
-  ) {
+    previous.currentSessionId !== event.sessionId;
+
+  if (didSessionChange) {
     nextResetCount += 1;
     lastResetAtMillis = event.capturedAtMillis;
     lastResetReason = "session.changed";
   } else if (
+    dimensionKey != null &&
     previous.currentDimensionKey != null &&
     previous.currentDimensionKey !== dimensionKey
   ) {
@@ -215,7 +217,8 @@ function reduceContinuityProjectionSnapshot(
 
   return {
     currentSessionId: event.sessionId,
-    currentDimensionKey: dimensionKey,
+    currentDimensionKey:
+      didSessionChange ? dimensionKey : dimensionKey ?? previous.currentDimensionKey,
     lastEventCapturedAtMillis: event.capturedAtMillis,
     lastResetAtMillis,
     lastResetReason,
@@ -474,4 +477,12 @@ function buildAggregatedItemDeltas(
     items,
     countsByResourceCategory
   };
+}
+
+function getTraceDimensionKey(event: RawTraceEvent): string | undefined {
+  return isPayloadTraceEvent(event) ? event.payload.dimensionKey : undefined;
+}
+
+function isPayloadTraceEvent(event: RawTraceEvent): event is PayloadTraceEvent {
+  return "payload" in event;
 }

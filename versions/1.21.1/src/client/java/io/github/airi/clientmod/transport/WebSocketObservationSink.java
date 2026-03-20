@@ -25,13 +25,24 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	// Keep a bounded backlog so reconnects and slow sends do not create avoidable trace gaps.
 	private static final int MAX_PENDING_MESSAGES = 128;
 	private static final long CONNECT_ATTEMPT_GUARD_MILLIS = 1000L;
+	private static final long SESSION_START_SEQUENCE = 1L;
+
+	public interface SessionReplaySupplier {
+		SessionReplay getActiveSession();
+	}
+
+	public record SessionReplay(
+		String sessionId,
+		long startedAtMillis
+	) {
+	}
 
 	private final HttpClient httpClient = HttpClient.newHttpClient();
 	private final Deque<String> pendingMessages = new ArrayDeque<>();
+	private final SessionReplaySupplier sessionReplaySupplier;
 	private final TransportStatusStore statusStore;
 	private final TransportTelemetry telemetry;
 	private final URI endpointUri;
-	private final String sessionId = Long.toUnsignedString(System.currentTimeMillis(), 36);
 
 	private WebSocket webSocket;
 	private boolean connectInFlight;
@@ -39,14 +50,24 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	private String inFlightMessage;
 	private long connectAttemptStartedAtMillis;
 	private long lastConnectAttemptAtMillis;
+	private boolean replayActiveSessionOnNextOpen;
 
 	public WebSocketObservationSink(TransportStatusStore statusStore) {
-		this(statusStore, TransportTelemetry.NOOP);
+		this(statusStore, TransportTelemetry.NOOP, () -> null);
 	}
 
 	public WebSocketObservationSink(TransportStatusStore statusStore, TransportTelemetry telemetry) {
+		this(statusStore, telemetry, () -> null);
+	}
+
+	public WebSocketObservationSink(
+		TransportStatusStore statusStore,
+		TransportTelemetry telemetry,
+		SessionReplaySupplier sessionReplaySupplier
+	) {
 		this.statusStore = statusStore;
 		this.telemetry = telemetry;
+		this.sessionReplaySupplier = sessionReplaySupplier == null ? () -> null : sessionReplaySupplier;
 		this.endpointUri = resolveEndpointUri();
 		this.statusStore.setEndpoint(endpointUri.toString());
 	}
@@ -57,8 +78,36 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 
 	@Override
 	public void emit(TraceEvent event) {
+		SessionReplay activeSession = sessionReplaySupplier.getActiveSession();
+		if (activeSession == null) {
+			statusStore.recordSendSkipped("hub ingress trace skipped: no active world session");
+			return;
+		}
+
+		enqueueSerializedTrace(serializeTraceEvent(activeSession.sessionId(), event));
+	}
+
+	public void emitSessionStart(String sessionId, long sequence, long capturedAtMillis) {
+		enqueueSerializedTrace(
+			serializeSessionControlFrame("trace.session.start", sessionId, sequence, capturedAtMillis),
+			true
+		);
+	}
+
+	public void emitSessionEnd(String sessionId, long sequence, long capturedAtMillis) {
+		enqueueSerializedTrace(serializeSessionControlFrame("trace.session.end", sessionId, sequence, capturedAtMillis));
+	}
+
+	private void enqueueSerializedTrace(String message) {
+		enqueueSerializedTrace(message, false);
+	}
+
+	private void enqueueSerializedTrace(String message, boolean replayActiveSessionOnNextOpenIfDisconnected) {
 		synchronized (this) {
-			enqueueMessageLocked(serializeTraceEvent(event));
+			if (replayActiveSessionOnNextOpenIfDisconnected && webSocket == null) {
+				replayActiveSessionOnNextOpen = true;
+			}
+			enqueueMessageLocked(message);
 		}
 
 		connectIfNeeded();
@@ -111,6 +160,19 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		pendingMessages.addLast(message);
 	}
 
+	private void enqueuePriorityMessageLocked(String message) {
+		if (pendingMessages.size() >= MAX_PENDING_MESSAGES) {
+			pendingMessages.removeFirst();
+			statusStore.recordSendSkipped("hub ingress backlog full; dropped oldest queued sample");
+		}
+
+		pendingMessages.addFirst(message);
+	}
+
+	private boolean hasQueuedMessageLocked(String message) {
+		return message.equals(inFlightMessage) || pendingMessages.contains(message);
+	}
+
 	private boolean restoreInFlightMessageLocked() {
 		if (inFlightMessage == null) {
 			return !pendingMessages.isEmpty();
@@ -146,6 +208,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			shouldReconnect = restoreInFlightMessageLocked();
 			if (webSocket == failingSocket) {
 				webSocket = null;
+				replayActiveSessionOnNextOpen = true;
 				shouldAbort = true;
 				shouldReconnect = true;
 			}
@@ -172,12 +235,19 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 
 	private void handleOpen(WebSocket socket) {
 		long connectDurationMillis;
+		boolean shouldReplayActiveSession;
 
 		synchronized (this) {
 			connectDurationMillis = finishConnectAttemptLocked();
 			webSocket = socket;
 			connectInFlight = false;
 			sendInFlight = false;
+			shouldReplayActiveSession = replayActiveSessionOnNextOpen;
+			replayActiveSessionOnNextOpen = false;
+		}
+
+		if (shouldReplayActiveSession) {
+			prependActiveSessionReplay(socket);
 		}
 
 		TransportStateTransition transition = statusStore.markOpen();
@@ -202,6 +272,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			webSocket = null;
 			connectInFlight = false;
 			sendInFlight = false;
+			replayActiveSessionOnNextOpen = true;
 			shouldReconnect = restoreInFlightMessageLocked();
 			transition = statusCode == WebSocket.NORMAL_CLOSURE
 				? statusStore.markDisconnected(closeReason)
@@ -239,6 +310,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			webSocket = null;
 			connectInFlight = false;
 			sendInFlight = false;
+			replayActiveSessionOnNextOpen = true;
 			shouldReconnect = restoreInFlightMessageLocked();
 			transition = statusStore.markError("socket error: " + summarize(error));
 		}
@@ -356,37 +428,80 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		return "closed (" + statusCode + "): " + reason;
 	}
 
-	private String serializeTraceEvent(TraceEvent event) {
+	private void prependActiveSessionReplay(WebSocket socket) {
+		SessionReplay sessionReplay = sessionReplaySupplier.getActiveSession();
+		if (sessionReplay == null) {
+			return;
+		}
+
+		String replayMessage = serializeSessionControlFrame(
+			"trace.session.start",
+			sessionReplay.sessionId(),
+			SESSION_START_SEQUENCE,
+			sessionReplay.startedAtMillis()
+		);
+		boolean replayQueued = false;
+
+		synchronized (this) {
+			if (webSocket != socket || hasQueuedMessageLocked(replayMessage)) {
+				return;
+			}
+
+			enqueuePriorityMessageLocked(replayMessage);
+			replayQueued = true;
+		}
+
+		if (replayQueued) {
+			AiriUserClientMod.LOGGER.info(
+				"Replayed active world session start for websocket reconnect: {}",
+				sessionReplay.sessionId()
+			);
+		}
+	}
+
+	private String serializeSessionControlFrame(String kind, String sessionId, long sequence, long capturedAtMillis) {
+		StringBuilder json = new StringBuilder(128);
+		json.append('{');
+		json.append("\"v\":1,");
+		json.append("\"kind\":\"").append(kind).append("\",");
+		json.append("\"sessionId\":\"").append(escapeJson(sessionId)).append("\",");
+		json.append("\"seq\":").append(sequence).append(',');
+		json.append("\"capturedAtMillis\":").append(capturedAtMillis);
+		json.append('}');
+		return json.toString();
+	}
+
+	private String serializeTraceEvent(String sessionId, TraceEvent event) {
 		if (event instanceof ObservationSample sample) {
-			return serializeObservationSample(sample);
+			return serializeObservationSample(sessionId, sample);
 		}
 
 		if (event instanceof PlayerLookTargetChangedTraceEvent lookTargetChanged) {
-			return serializePlayerLookTargetChangedTraceEvent(lookTargetChanged);
+			return serializePlayerLookTargetChangedTraceEvent(sessionId, lookTargetChanged);
 		}
 
 		if (event instanceof PlayerSelectedSlotChangedTraceEvent selectedSlotChanged) {
-			return serializePlayerSelectedSlotChangedTraceEvent(selectedSlotChanged);
+			return serializePlayerSelectedSlotChangedTraceEvent(sessionId, selectedSlotChanged);
 		}
 
 		if (event instanceof PlayerHandStateChangedTraceEvent handStateChanged) {
-			return serializePlayerHandStateChangedTraceEvent(handStateChanged);
+			return serializePlayerHandStateChangedTraceEvent(sessionId, handStateChanged);
 		}
 
 		if (event instanceof InteractionBlockBreakTraceEvent blockBreak) {
-			return serializeInteractionBlockBreakTraceEvent(blockBreak);
+			return serializeInteractionBlockBreakTraceEvent(sessionId, blockBreak);
 		}
 
 		if (event instanceof InventoryTransactionTraceEvent inventoryTransaction) {
-			return serializeInventoryTransactionTraceEvent(inventoryTransaction);
+			return serializeInventoryTransactionTraceEvent(sessionId, inventoryTransaction);
 		}
 
 		throw new IllegalArgumentException("Unsupported trace event: " + event.getClass().getName());
 	}
 
-	private String serializeObservationSample(ObservationSample sample) {
+	private String serializeObservationSample(String sessionId, ObservationSample sample) {
 		StringBuilder json = new StringBuilder(320);
-		appendTraceEnvelopeStart(json, "observation.sample", sample);
+		appendTraceEnvelopeStart(json, sessionId, "observation.sample", sample);
 		appendCommonPayloadStart(json, sample);
 		json.append("\"fps\":").append(sample.fps()).append(',');
 		json.append("\"x\":").append(sample.x()).append(',');
@@ -400,9 +515,9 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		return json.toString();
 	}
 
-	private String serializePlayerLookTargetChangedTraceEvent(PlayerLookTargetChangedTraceEvent event) {
+	private String serializePlayerLookTargetChangedTraceEvent(String sessionId, PlayerLookTargetChangedTraceEvent event) {
 		StringBuilder json = new StringBuilder(320);
-		appendTraceEnvelopeStart(json, "player.look.target.changed", event);
+		appendTraceEnvelopeStart(json, sessionId, "player.look.target.changed", event);
 		appendCommonPayloadStart(json, event);
 		json.append("\"target\":");
 		appendLookTarget(json, event.target());
@@ -410,9 +525,9 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		return json.toString();
 	}
 
-	private String serializePlayerSelectedSlotChangedTraceEvent(PlayerSelectedSlotChangedTraceEvent event) {
+	private String serializePlayerSelectedSlotChangedTraceEvent(String sessionId, PlayerSelectedSlotChangedTraceEvent event) {
 		StringBuilder json = new StringBuilder(320);
-		appendTraceEnvelopeStart(json, "player.selected_slot.changed", event);
+		appendTraceEnvelopeStart(json, sessionId, "player.selected_slot.changed", event);
 		appendCommonPayloadStart(json, event);
 		json.append("\"previousSelectedSlot\":").append(event.previousSelectedSlot()).append(',');
 		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
@@ -425,9 +540,9 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		return json.toString();
 	}
 
-	private String serializePlayerHandStateChangedTraceEvent(PlayerHandStateChangedTraceEvent event) {
+	private String serializePlayerHandStateChangedTraceEvent(String sessionId, PlayerHandStateChangedTraceEvent event) {
 		StringBuilder json = new StringBuilder(320);
-		appendTraceEnvelopeStart(json, "player.hand_state.changed", event);
+		appendTraceEnvelopeStart(json, sessionId, "player.hand_state.changed", event);
 		appendCommonPayloadStart(json, event);
 		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
 		json.append("\"mainHand\":");
@@ -439,9 +554,9 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		return json.toString();
 	}
 
-	private String serializeInteractionBlockBreakTraceEvent(InteractionBlockBreakTraceEvent event) {
+	private String serializeInteractionBlockBreakTraceEvent(String sessionId, InteractionBlockBreakTraceEvent event) {
 		StringBuilder json = new StringBuilder(320);
-		appendTraceEnvelopeStart(json, "interaction.block.break", event);
+		appendTraceEnvelopeStart(json, sessionId, "interaction.block.break", event);
 		appendCommonPayloadStart(json, event);
 		json.append("\"block\":");
 		appendBlockReference(json, event.block());
@@ -454,9 +569,9 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		return json.toString();
 	}
 
-	private String serializeInventoryTransactionTraceEvent(InventoryTransactionTraceEvent event) {
+	private String serializeInventoryTransactionTraceEvent(String sessionId, InventoryTransactionTraceEvent event) {
 		StringBuilder json = new StringBuilder(512);
-		appendTraceEnvelopeStart(json, "inventory.transaction", event);
+		appendTraceEnvelopeStart(json, sessionId, "inventory.transaction", event);
 		appendCommonPayloadStart(json, event);
 		json.append("\"containerKind\":\"").append(escapeJson(event.containerKind())).append("\",");
 		json.append("\"source\":\"").append(escapeJson(event.source())).append("\",");
@@ -467,7 +582,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		return json.toString();
 	}
 
-	private void appendTraceEnvelopeStart(StringBuilder json, String kind, TraceEvent event) {
+	private void appendTraceEnvelopeStart(StringBuilder json, String sessionId, String kind, TraceEvent event) {
 		json.append('{');
 		json.append("\"v\":1,");
 		json.append("\"kind\":\"").append(kind).append("\",");

@@ -13,6 +13,7 @@ import io.github.airi.clientmod.core.trace.PlayerHandStateChangedTraceEvent;
 import io.github.airi.clientmod.core.trace.PlayerLookTargetChangedTraceEvent;
 import io.github.airi.clientmod.core.trace.PlayerSelectedSlotChangedTraceEvent;
 import io.github.airi.clientmod.core.trace.TraceEvent;
+import io.github.airi.clientmod.session.WorldSessionTracker;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
@@ -20,10 +21,10 @@ import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
+import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
-import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
@@ -34,8 +35,8 @@ public final class ObservationSampler {
 	private static final int MAX_INVENTORY_SLOT_DELTAS = 24;
 
 	private final ObservationEmitter emitter;
+	private final WorldSessionTracker worldSessionTracker;
 	private int ticksUntilEmit = EMIT_INTERVAL_TICKS;
-	private long nextSequence = 1L;
 	private TraceEvent.LookTarget lastLookTarget;
 	private Integer lastSelectedSlot;
 	private TraceEvent.ItemStackSnapshot lastMainHand;
@@ -43,12 +44,13 @@ public final class ObservationSampler {
 	private List<TraceEvent.ItemStackSnapshot> lastInventorySnapshot = List.of();
 	private PendingBlockAttack pendingBlockAttack;
 
-	public ObservationSampler(ObservationEmitter emitter) {
+	public ObservationSampler(ObservationEmitter emitter, WorldSessionTracker worldSessionTracker) {
 		this.emitter = emitter;
+		this.worldSessionTracker = worldSessionTracker;
 	}
 
 	public void onEndClientTick(MinecraftClient client) {
-		if (client.world == null || client.player == null) {
+		if (client.world == null || client.player == null || !worldSessionTracker.hasActiveSession()) {
 			resetTransientState();
 			return;
 		}
@@ -65,13 +67,18 @@ public final class ObservationSampler {
 
 		ticksUntilEmit = EMIT_INTERVAL_TICKS;
 
+		WorldSessionTracker.SampleTraceContext traceContext = worldSessionTracker.beginTrace();
+		if (traceContext == null) {
+			return;
+		}
+
 		Vec3d position = client.player.getPos();
 		Vec3d velocity = client.player.getVelocity();
 		TraceEvent.LookTarget currentLookTarget = captureLookTarget(client);
 
 		emitter.emit(new ObservationSample(
-			nextSequence(),
-			System.currentTimeMillis(),
+			traceContext.sequence(),
+			traceContext.capturedAtMillis(),
 			client.world.getTime(),
 			client.getCurrentFps(),
 			client.world.getRegistryKey().getValue().toString(),
@@ -86,7 +93,7 @@ public final class ObservationSampler {
 	}
 
 	public void onAttackBlock(net.minecraft.entity.player.PlayerEntity player, World world, Hand hand, BlockPos pos, Direction direction) {
-		if (!world.isClient()) {
+		if (!world.isClient() || !worldSessionTracker.hasActiveSession()) {
 			return;
 		}
 
@@ -100,13 +107,18 @@ public final class ObservationSampler {
 	}
 
 	public void onAfterClientBlockBreak(ClientWorld world, ClientPlayerEntity player, BlockPos pos, BlockState state) {
+		WorldSessionTracker.SampleTraceContext traceContext = worldSessionTracker.beginTrace();
+		if (traceContext == null) {
+			return;
+		}
+
 		PendingBlockAttack attack = consumePendingBlockAttack(world, pos);
 		String hitFace = attack == null ? null : attack.hitFace();
 		String hand = attack == null ? "main_hand" : attack.hand();
 
 		emitter.emit(new InteractionBlockBreakTraceEvent(
-			nextSequence(),
-			System.currentTimeMillis(),
+			traceContext.sequence(),
+			traceContext.capturedAtMillis(),
 			world.getTime(),
 			world.getRegistryKey().getValue().toString(),
 			new TraceEvent.BlockReference(
@@ -126,10 +138,15 @@ public final class ObservationSampler {
 			return;
 		}
 
+		WorldSessionTracker.SampleTraceContext traceContext = worldSessionTracker.beginTrace();
+		if (traceContext == null) {
+			return;
+		}
+
 		lastLookTarget = currentLookTarget;
 		emitter.emit(new PlayerLookTargetChangedTraceEvent(
-			nextSequence(),
-			System.currentTimeMillis(),
+			traceContext.sequence(),
+			traceContext.capturedAtMillis(),
 			client.world.getTime(),
 			client.world.getRegistryKey().getValue().toString(),
 			currentLookTarget
@@ -147,9 +164,14 @@ public final class ObservationSampler {
 			return;
 		}
 
+		WorldSessionTracker.SampleTraceContext traceContext = worldSessionTracker.beginTrace();
+		if (traceContext == null) {
+			return;
+		}
+
 		emitter.emit(new PlayerSelectedSlotChangedTraceEvent(
-			nextSequence(),
-			System.currentTimeMillis(),
+			traceContext.sequence(),
+			traceContext.capturedAtMillis(),
 			client.world.getTime(),
 			client.world.getRegistryKey().getValue().toString(),
 			lastSelectedSlot,
@@ -174,9 +196,14 @@ public final class ObservationSampler {
 			return;
 		}
 
+		WorldSessionTracker.SampleTraceContext traceContext = worldSessionTracker.beginTrace();
+		if (traceContext == null) {
+			return;
+		}
+
 		emitter.emit(new PlayerHandStateChangedTraceEvent(
-			nextSequence(),
-			System.currentTimeMillis(),
+			traceContext.sequence(),
+			traceContext.capturedAtMillis(),
 			client.world.getTime(),
 			client.world.getRegistryKey().getValue().toString(),
 			client.player.getInventory().selectedSlot,
@@ -196,14 +223,20 @@ public final class ObservationSampler {
 		}
 
 		List<TraceEvent.InventorySlotDelta> changedSlots = buildInventorySlotDeltas(lastInventorySnapshot, currentInventorySnapshot);
-		lastInventorySnapshot = currentInventorySnapshot;
 		if (changedSlots.isEmpty()) {
+			lastInventorySnapshot = currentInventorySnapshot;
 			return;
 		}
 
+		WorldSessionTracker.SampleTraceContext traceContext = worldSessionTracker.beginTrace();
+		if (traceContext == null) {
+			return;
+		}
+
+		lastInventorySnapshot = currentInventorySnapshot;
 		emitter.emit(new InventoryTransactionTraceEvent(
-			nextSequence(),
-			System.currentTimeMillis(),
+			traceContext.sequence(),
+			traceContext.capturedAtMillis(),
 			client.world.getTime(),
 			client.world.getRegistryKey().getValue().toString(),
 			"player_inventory",
@@ -222,7 +255,12 @@ public final class ObservationSampler {
 			case BLOCK -> captureBlockTarget(client, (BlockHitResult) hitResult);
 			case ENTITY -> captureEntityTarget((EntityHitResult) hitResult);
 			case MISS -> new TraceEvent.LookTarget("miss", "miss", null, null);
-			default -> new TraceEvent.LookTarget(hitResult.getType().name().toLowerCase(Locale.ROOT), hitResult.getType().name().toLowerCase(Locale.ROOT), null, null);
+			default -> new TraceEvent.LookTarget(
+				hitResult.getType().name().toLowerCase(Locale.ROOT),
+				hitResult.getType().name().toLowerCase(Locale.ROOT),
+				null,
+				null
+			);
 		};
 	}
 
@@ -315,10 +353,6 @@ public final class ObservationSampler {
 		lastOffHand = null;
 		lastInventorySnapshot = List.of();
 		pendingBlockAttack = null;
-	}
-
-	private long nextSequence() {
-		return nextSequence++;
 	}
 
 	private PendingBlockAttack consumePendingBlockAttack(ClientWorld world, BlockPos pos) {

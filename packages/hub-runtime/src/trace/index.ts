@@ -1,4 +1,6 @@
 export const CURRENT_MOD_TRACE_VERSION = 1 as const;
+export const CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START = "trace.session.start" as const;
+export const CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END = "trace.session.end" as const;
 export const CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE = "observation.sample" as const;
 export const CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED = "player.look.target.changed" as const;
 export const CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED =
@@ -8,6 +10,8 @@ export const CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK = "interaction.block
 export const CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION = "inventory.transaction" as const;
 
 export type RawTraceKind =
+  | typeof CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START
+  | typeof CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END
   | typeof CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE
   | typeof CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED
   | typeof CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED
@@ -70,6 +74,24 @@ export interface TraceEvidenceRef {
   readonly capturedAtMillis: number;
 }
 
+export type CurrentModTraceKind = RawTraceKind;
+
+interface CurrentModTraceEventBase {
+  readonly v: typeof CURRENT_MOD_TRACE_VERSION;
+  readonly kind: CurrentModTraceKind;
+  readonly sessionId: string;
+  readonly seq: number;
+  readonly capturedAtMillis: number;
+}
+
+export interface CurrentModSessionStartTraceEvent extends CurrentModTraceEventBase {
+  readonly kind: typeof CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START;
+}
+
+export interface CurrentModSessionEndTraceEvent extends CurrentModTraceEventBase {
+  readonly kind: typeof CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END;
+}
+
 /**
  * Initial/current-state raw trace contract for local hub ingress.
  *
@@ -92,12 +114,8 @@ export interface CurrentModObservationSampleTracePayload {
 /**
  * Initial/current-state observation sample emitted by the Java mod.
  */
-export interface CurrentModObservationSampleTraceEvent {
-  readonly v: typeof CURRENT_MOD_TRACE_VERSION;
+export interface CurrentModObservationSampleTraceEvent extends CurrentModTraceEventBase {
   readonly kind: typeof CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE;
-  readonly sessionId: string;
-  readonly seq: number;
-  readonly capturedAtMillis: number;
   readonly payload: CurrentModObservationSampleTracePayload;
 }
 
@@ -187,12 +205,16 @@ export interface InventoryTransactionTraceEvent {
 }
 
 export type CurrentModTraceEvent =
+  | CurrentModSessionStartTraceEvent
+  | CurrentModSessionEndTraceEvent
   | CurrentModObservationSampleTraceEvent
   | PlayerLookTargetChangedTraceEvent
   | PlayerSelectedSlotChangedTraceEvent
   | PlayerHandStateChangedTraceEvent
   | InteractionBlockBreakTraceEvent
   | InventoryTransactionTraceEvent;
+export type SessionStartTraceEvent = CurrentModSessionStartTraceEvent;
+export type SessionEndTraceEvent = CurrentModSessionEndTraceEvent;
 export type ObservationSampleTracePayload = CurrentModObservationSampleTracePayload;
 export type ObservationSampleTraceEvent = CurrentModObservationSampleTraceEvent;
 export type RawTraceEvent = CurrentModTraceEvent;
@@ -216,6 +238,44 @@ export function decodeCurrentModTraceEvent(value: unknown): RawTraceDecodeResult
 
   if (value.v !== CURRENT_MOD_TRACE_VERSION) {
     return { ok: false, reason: "unsupported trace version" };
+  }
+
+  if (typeof value.sessionId !== "string" || value.sessionId.length === 0) {
+    return { ok: false, reason: "sessionId must be a non-empty string" };
+  }
+
+  if (!isIntegerNumber(value.seq)) {
+    return { ok: false, reason: "seq must be an integer number" };
+  }
+
+  if (!isIntegerNumber(value.capturedAtMillis)) {
+    return { ok: false, reason: "capturedAtMillis must be an integer number" };
+  }
+
+  if (value.kind === CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START) {
+    return {
+      ok: true,
+      event: {
+        v: CURRENT_MOD_TRACE_VERSION,
+        kind: CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START,
+        sessionId: value.sessionId,
+        seq: value.seq,
+        capturedAtMillis: value.capturedAtMillis
+      }
+    };
+  }
+
+  if (value.kind === CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END) {
+    return {
+      ok: true,
+      event: {
+        v: CURRENT_MOD_TRACE_VERSION,
+        kind: CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END,
+        sessionId: value.sessionId,
+        seq: value.seq,
+        capturedAtMillis: value.capturedAtMillis
+      }
+    };
   }
 
   const header = decodeTraceHeader(value);
@@ -286,18 +346,6 @@ function decodeTraceHeader(value: Record<string, unknown>): DecodeValueResult<Tr
     return { ok: false, reason: "unsupported trace kind" };
   }
 
-  if (typeof value.sessionId !== "string" || value.sessionId.length === 0) {
-    return { ok: false, reason: "sessionId must be a non-empty string" };
-  }
-
-  if (!isIntegerNumber(value.seq)) {
-    return { ok: false, reason: "seq must be an integer number" };
-  }
-
-  if (!isIntegerNumber(value.capturedAtMillis)) {
-    return { ok: false, reason: "capturedAtMillis must be an integer number" };
-  }
-
   if (!isRecord(value.payload)) {
     return { ok: false, reason: "payload must be an object" };
   }
@@ -305,18 +353,16 @@ function decodeTraceHeader(value: Record<string, unknown>): DecodeValueResult<Tr
   return {
     ok: true,
     value: {
-      sessionId: value.sessionId,
-      seq: value.seq,
-      capturedAtMillis: value.capturedAtMillis,
+      sessionId: value.sessionId as string,
+      seq: value.seq as number,
+      capturedAtMillis: value.capturedAtMillis as number,
       kind: value.kind,
       payload: value.payload
     }
   };
 }
 
-function decodeObservationSampleTraceEvent(
-  header: TraceHeader
-): RawTraceDecodeResult {
+function decodeObservationSampleTraceEvent(header: TraceHeader): RawTraceDecodeResult {
   const payload = header.payload;
   const context = decodeCommonTraceContext(payload);
 
@@ -816,6 +862,8 @@ function decodeInventorySlotDelta(
 
 function isSupportedTraceKind(value: unknown): value is RawTraceKind {
   return (
+    value === CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START ||
+    value === CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END ||
     value === CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE ||
     value === CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED ||
     value === CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED ||

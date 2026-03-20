@@ -37,6 +37,13 @@ public final class DebugHudObservationStore implements ObservationEmitter {
 		}
 	}
 
+	public void reset() {
+		recentSamples.clear();
+		latestSample = null;
+		totalEmitted = 0L;
+		firstCapturedAtMillis = 0L;
+	}
+
 	public List<String> buildPanelLines() {
 		List<String> lines = new ArrayList<>();
 		lines.add("[AIRI] observation emit");

@@ -312,8 +312,8 @@ export function App() {
             <EmptyState message="No retained traces yet." />
           ) : (
             <div className="list">
-              {state.traces.map(trace => (
-                <div className="list__row" key={trace.traceId}>
+              {state.traces.map((trace, index) => (
+                <div className="list__row" key={`${trace.traceId}:${trace.retainedAtMillis}:${index}`}>
                   <div>
                     <strong>{trace.traceId}</strong>
                     <p>
@@ -424,11 +424,18 @@ function formatTarget(target: TraceLookTarget | undefined): string {
 }
 
 function describeTraceSummary(event: RawTraceEvent): string {
-  return `${event.kind} · ${event.payload.dimensionKey}`;
+  if ("payload" in event) {
+    return `${event.kind} · ${event.payload.dimensionKey}`;
+  }
+
+  return event.kind;
 }
 
 function describeTraceDetail(event: RawTraceEvent): string {
   switch (event.kind) {
+    case "trace.session.start":
+    case "trace.session.end":
+      return `session ${event.sessionId}`;
     case "observation.sample":
       return formatVec3(event.payload.x, event.payload.y, event.payload.z);
     case "player.look.target.changed":

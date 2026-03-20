@@ -11,7 +11,10 @@ import {
   reduceProjectionSnapshot,
   type ProjectionSnapshot
 } from "./projection/index.js";
-import type { ObservationSampleTraceEvent, RawTraceEvent } from "./trace/index.js";
+import {
+  type ObservationSampleTraceEvent,
+  type RawTraceEvent
+} from "./trace/index.js";
 
 export type { DetectorSignal, DetectorSnapshot } from "./detector/index.js";
 export type { EpisodeOutput } from "./episode/index.js";
@@ -37,6 +40,8 @@ export type {
 export type {
   CurrentModObservationSampleTraceEvent,
   CurrentModObservationSampleTracePayload,
+  CurrentModSessionEndTraceEvent,
+  CurrentModSessionStartTraceEvent,
   CurrentModTraceEvent,
   InteractionBlockBreakTraceEvent,
   InteractionBlockBreakTracePayload,
@@ -54,6 +59,8 @@ export type {
   RawTraceDecodeResult,
   RawTraceDecodeSuccess,
   RawTraceEvent,
+  SessionEndTraceEvent,
+  SessionStartTraceEvent,
   TraceBlockFace,
   TraceBlockPosition,
   TraceEvidenceRef,
@@ -67,6 +74,8 @@ export type {
 } from "./trace/index.js";
 export {
   createRawTraceId,
+  CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END,
+  CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START,
   CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE,
   CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK,
   CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION,
@@ -95,6 +104,7 @@ export interface HubRuntimeSnapshot {
 export type ProjectionState = HubRuntimeSnapshot;
 
 export interface HubRuntime extends HubTraceSink {
+  reset(): void;
   snapshot(): HubRuntimeSnapshot;
 }
 
@@ -112,6 +122,21 @@ export function createHubRuntime(options: CreateHubRuntimeOptions): HubRuntime {
   let detectors = evaluateDetectors(projections);
   let episodeState: EpisodeMachineState = createInitialEpisodeMachineState();
 
+  const reset = () => {
+    logger.info("reset runtime snapshot", {
+      previousTraceCount: traceCount,
+      hadLatestObservation: latestObservation != null,
+      hadLatestTrace: latestTrace != null
+    });
+    traceCount = 0;
+    latestObservation = undefined;
+    latestTrace = undefined;
+    lastAcceptedAt = undefined;
+    projections = createEmptyProjectionSnapshot();
+    detectors = evaluateDetectors(projections);
+    episodeState = createInitialEpisodeMachineState();
+  };
+
   return {
     acceptTrace(event) {
       traceCount += 1;
@@ -128,6 +153,7 @@ export function createHubRuntime(options: CreateHubRuntimeOptions): HubRuntime {
         projections,
         detectors
       });
+
       lastAcceptedAt = Date.now();
       logger.debug("accepted trace", {
         kind: event.kind,
@@ -138,13 +164,13 @@ export function createHubRuntime(options: CreateHubRuntimeOptions): HubRuntime {
         woodSupportScore: detectors.composites.woodGatheringSupport.score
       });
     },
+    reset,
     snapshot() {
       return {
         traceCount,
         latestObservation,
         latestTrace,
-        lastAcceptedAt
-        ,
+        lastAcceptedAt,
         projections,
         detectors,
         episodes: episodeState.output
