@@ -5,11 +5,18 @@ import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.List;
 import java.util.concurrent.CompletionStage;
 
 import io.github.airi.clientmod.AiriUserClientMod;
+import io.github.airi.clientmod.core.trace.InteractionBlockBreakTraceEvent;
+import io.github.airi.clientmod.core.trace.InventoryTransactionTraceEvent;
 import io.github.airi.clientmod.core.trace.ObservationEmitter;
 import io.github.airi.clientmod.core.trace.ObservationSample;
+import io.github.airi.clientmod.core.trace.PlayerHandStateChangedTraceEvent;
+import io.github.airi.clientmod.core.trace.PlayerLookTargetChangedTraceEvent;
+import io.github.airi.clientmod.core.trace.PlayerSelectedSlotChangedTraceEvent;
+import io.github.airi.clientmod.core.trace.TraceEvent;
 
 public final class WebSocketObservationSink implements ObservationEmitter {
 	private static final String HUB_INGRESS_WS_URI_PROPERTY = "airi.hub.ingress.ws.uri";
@@ -49,9 +56,9 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	}
 
 	@Override
-	public void emit(ObservationSample sample) {
+	public void emit(TraceEvent event) {
 		synchronized (this) {
-			enqueueMessageLocked(serializeObservationSample(sample));
+			enqueueMessageLocked(serializeTraceEvent(event));
 		}
 
 		connectIfNeeded();
@@ -349,18 +356,39 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		return "closed (" + statusCode + "): " + reason;
 	}
 
+	private String serializeTraceEvent(TraceEvent event) {
+		if (event instanceof ObservationSample sample) {
+			return serializeObservationSample(sample);
+		}
+
+		if (event instanceof PlayerLookTargetChangedTraceEvent lookTargetChanged) {
+			return serializePlayerLookTargetChangedTraceEvent(lookTargetChanged);
+		}
+
+		if (event instanceof PlayerSelectedSlotChangedTraceEvent selectedSlotChanged) {
+			return serializePlayerSelectedSlotChangedTraceEvent(selectedSlotChanged);
+		}
+
+		if (event instanceof PlayerHandStateChangedTraceEvent handStateChanged) {
+			return serializePlayerHandStateChangedTraceEvent(handStateChanged);
+		}
+
+		if (event instanceof InteractionBlockBreakTraceEvent blockBreak) {
+			return serializeInteractionBlockBreakTraceEvent(blockBreak);
+		}
+
+		if (event instanceof InventoryTransactionTraceEvent inventoryTransaction) {
+			return serializeInventoryTransactionTraceEvent(inventoryTransaction);
+		}
+
+		throw new IllegalArgumentException("Unsupported trace event: " + event.getClass().getName());
+	}
+
 	private String serializeObservationSample(ObservationSample sample) {
 		StringBuilder json = new StringBuilder(320);
-		json.append('{');
-		json.append("\"v\":1,");
-		json.append("\"kind\":\"observation.sample\",");
-		json.append("\"sessionId\":\"").append(escapeJson(sessionId)).append("\",");
-		json.append("\"seq\":").append(sample.sequence()).append(',');
-		json.append("\"capturedAtMillis\":").append(sample.capturedAtMillis()).append(',');
-		json.append("\"payload\":{");
-		json.append("\"worldTick\":").append(sample.worldTick()).append(',');
+		appendTraceEnvelopeStart(json, "observation.sample", sample);
+		appendCommonPayloadStart(json, sample);
 		json.append("\"fps\":").append(sample.fps()).append(',');
-		json.append("\"dimensionKey\":\"").append(escapeJson(sample.dimensionKey())).append("\",");
 		json.append("\"x\":").append(sample.x()).append(',');
 		json.append("\"y\":").append(sample.y()).append(',');
 		json.append("\"z\":").append(sample.z()).append(',');
@@ -370,6 +398,164 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		json.append("\"targetDescription\":\"").append(escapeJson(sample.targetDescription())).append('"');
 		json.append("}}");
 		return json.toString();
+	}
+
+	private String serializePlayerLookTargetChangedTraceEvent(PlayerLookTargetChangedTraceEvent event) {
+		StringBuilder json = new StringBuilder(320);
+		appendTraceEnvelopeStart(json, "player.look.target.changed", event);
+		appendCommonPayloadStart(json, event);
+		json.append("\"target\":");
+		appendLookTarget(json, event.target());
+		json.append("}}");
+		return json.toString();
+	}
+
+	private String serializePlayerSelectedSlotChangedTraceEvent(PlayerSelectedSlotChangedTraceEvent event) {
+		StringBuilder json = new StringBuilder(320);
+		appendTraceEnvelopeStart(json, "player.selected_slot.changed", event);
+		appendCommonPayloadStart(json, event);
+		json.append("\"previousSelectedSlot\":").append(event.previousSelectedSlot()).append(',');
+		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
+		json.append("\"mainHand\":");
+		appendItemStackSnapshot(json, event.mainHand());
+		json.append(',');
+		json.append("\"offHand\":");
+		appendItemStackSnapshot(json, event.offHand());
+		json.append("}}");
+		return json.toString();
+	}
+
+	private String serializePlayerHandStateChangedTraceEvent(PlayerHandStateChangedTraceEvent event) {
+		StringBuilder json = new StringBuilder(320);
+		appendTraceEnvelopeStart(json, "player.hand_state.changed", event);
+		appendCommonPayloadStart(json, event);
+		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
+		json.append("\"mainHand\":");
+		appendItemStackSnapshot(json, event.mainHand());
+		json.append(',');
+		json.append("\"offHand\":");
+		appendItemStackSnapshot(json, event.offHand());
+		json.append("}}");
+		return json.toString();
+	}
+
+	private String serializeInteractionBlockBreakTraceEvent(InteractionBlockBreakTraceEvent event) {
+		StringBuilder json = new StringBuilder(320);
+		appendTraceEnvelopeStart(json, "interaction.block.break", event);
+		appendCommonPayloadStart(json, event);
+		json.append("\"block\":");
+		appendBlockReference(json, event.block());
+		json.append(',');
+		json.append("\"hand\":\"").append(escapeJson(event.hand())).append("\",");
+		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
+		json.append("\"heldItem\":");
+		appendItemStackSnapshot(json, event.heldItem());
+		json.append("}}");
+		return json.toString();
+	}
+
+	private String serializeInventoryTransactionTraceEvent(InventoryTransactionTraceEvent event) {
+		StringBuilder json = new StringBuilder(512);
+		appendTraceEnvelopeStart(json, "inventory.transaction", event);
+		appendCommonPayloadStart(json, event);
+		json.append("\"containerKind\":\"").append(escapeJson(event.containerKind())).append("\",");
+		json.append("\"source\":\"").append(escapeJson(event.source())).append("\",");
+		json.append("\"changedSlots\":[");
+		appendInventorySlotDeltas(json, event.changedSlots());
+		json.append("]}");
+		json.append('}');
+		return json.toString();
+	}
+
+	private void appendTraceEnvelopeStart(StringBuilder json, String kind, TraceEvent event) {
+		json.append('{');
+		json.append("\"v\":1,");
+		json.append("\"kind\":\"").append(kind).append("\",");
+		json.append("\"sessionId\":\"").append(escapeJson(sessionId)).append("\",");
+		json.append("\"seq\":").append(event.sequence()).append(',');
+		json.append("\"capturedAtMillis\":").append(event.capturedAtMillis()).append(',');
+		json.append("\"payload\":{");
+	}
+
+	private void appendCommonPayloadStart(StringBuilder json, TraceEvent event) {
+		json.append("\"worldTick\":").append(event.worldTick()).append(',');
+		json.append("\"dimensionKey\":\"").append(escapeJson(event.dimensionKey())).append("\",");
+	}
+
+	private void appendLookTarget(StringBuilder json, TraceEvent.LookTarget target) {
+		json.append('{');
+		json.append("\"kind\":\"").append(escapeJson(target.kind())).append('"');
+		if (target.targetDescription() != null) {
+			json.append(",\"targetDescription\":\"").append(escapeJson(target.targetDescription())).append('"');
+		}
+		if (target.block() != null) {
+			json.append(",\"block\":");
+			appendBlockReference(json, target.block());
+		}
+		if (target.entity() != null) {
+			json.append(",\"entity\":");
+			appendLookTargetEntity(json, target.entity());
+		}
+		json.append('}');
+	}
+
+	private void appendLookTargetEntity(StringBuilder json, TraceEvent.LookTargetEntity entity) {
+		json.append('{');
+		json.append("\"entityTypeId\":\"").append(escapeJson(entity.entityTypeId())).append('"');
+		if (entity.entityId() != null) {
+			json.append(",\"entityId\":").append(entity.entityId());
+		}
+		json.append('}');
+	}
+
+	private void appendBlockReference(StringBuilder json, TraceEvent.BlockReference block) {
+		json.append('{');
+		json.append("\"blockId\":\"").append(escapeJson(block.blockId())).append("\",");
+		json.append("\"position\":");
+		appendBlockPosition(json, block.position());
+		if (block.hitFace() != null) {
+			json.append(",\"hitFace\":\"").append(escapeJson(block.hitFace())).append('"');
+		}
+		json.append('}');
+	}
+
+	private void appendBlockPosition(StringBuilder json, TraceEvent.BlockPosition position) {
+		json.append('{');
+		json.append("\"x\":").append(position.x()).append(',');
+		json.append("\"y\":").append(position.y()).append(',');
+		json.append("\"z\":").append(position.z());
+		json.append('}');
+	}
+
+	private void appendItemStackSnapshot(StringBuilder json, TraceEvent.ItemStackSnapshot item) {
+		json.append('{');
+		json.append("\"itemId\":");
+		if (item.itemId() == null) {
+			json.append("null");
+		} else {
+			json.append('"').append(escapeJson(item.itemId())).append('"');
+		}
+		json.append(",\"count\":").append(item.count());
+		json.append(",\"damage\":").append(item.damage());
+		json.append(",\"maxDamage\":").append(item.maxDamage());
+		json.append('}');
+	}
+
+	private void appendInventorySlotDeltas(StringBuilder json, List<TraceEvent.InventorySlotDelta> changedSlots) {
+		for (int index = 0; index < changedSlots.size(); index++) {
+			if (index > 0) {
+				json.append(',');
+			}
+			TraceEvent.InventorySlotDelta delta = changedSlots.get(index);
+			json.append('{');
+			json.append("\"slot\":").append(delta.slot()).append(',');
+			json.append("\"previous\":");
+			appendItemStackSnapshot(json, delta.previous());
+			json.append(',');
+			json.append("\"current\":");
+			appendItemStackSnapshot(json, delta.current());
+			json.append('}');
+		}
 	}
 
 	private static String escapeJson(String value) {

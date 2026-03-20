@@ -8,7 +8,10 @@ import io.github.airi.clientmod.transport.TransportStatusStore;
 import io.github.airi.clientmod.transport.TransportTelemetry;
 import io.github.airi.clientmod.transport.WebSocketObservationSink;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.event.client.player.ClientPlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.event.player.AttackBlockCallback;
+import net.minecraft.util.ActionResult;
 
 public final class AiriUserClientModClient implements ClientModInitializer {
 	private static final DebugHudObservationStore DEBUG_STORE = new DebugHudObservationStore();
@@ -32,6 +35,11 @@ public final class AiriUserClientModClient implements ClientModInitializer {
 		observationSampler = new ObservationSampler(new FanoutObservationEmitter(DEBUG_STORE, websocketSink));
 		websocketSink.start();
 		ClientTickEvents.END_CLIENT_TICK.register(observationSampler::onEndClientTick);
+		AttackBlockCallback.EVENT.register((player, world, hand, pos, direction) -> {
+			observationSampler.onAttackBlock(player, world, hand, pos, direction);
+			return ActionResult.PASS;
+		});
+		ClientPlayerBlockBreakEvents.AFTER.register(observationSampler::onAfterClientBlockBreak);
 		AiriUserClientMod.LOGGER.info("Initialized AIRI experimental Fabric client instrumentation for Minecraft 1.21.1");
 	}
 }

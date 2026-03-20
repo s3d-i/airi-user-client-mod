@@ -4,7 +4,7 @@ import java.util.List;
 
 import io.github.airi.clientmod.AiriUserClientMod;
 import io.github.airi.clientmod.core.trace.ObservationEmitter;
-import io.github.airi.clientmod.core.trace.ObservationSample;
+import io.github.airi.clientmod.core.trace.TraceEvent;
 
 public final class FanoutObservationEmitter implements ObservationEmitter {
 	private final List<ObservationEmitter> emitters;
@@ -14,15 +14,16 @@ public final class FanoutObservationEmitter implements ObservationEmitter {
 	}
 
 	@Override
-	public void emit(ObservationSample sample) {
+	public void emit(TraceEvent event) {
 		for (ObservationEmitter emitter : emitters) {
 			try {
-				emitter.emit(sample);
+				emitter.emit(event);
 			} catch (RuntimeException exception) {
 				AiriUserClientMod.LOGGER.warn(
-					"Observation sink {} failed while handling sample {}",
+					"Observation sink {} failed while handling trace {} ({})",
 					emitter.getClass().getSimpleName(),
-					sample.sequence(),
+					event.sequence(),
+					event.getClass().getSimpleName(),
 					exception
 				);
 			}

@@ -8,6 +8,7 @@ import java.util.Locale;
 
 import io.github.airi.clientmod.core.trace.ObservationEmitter;
 import io.github.airi.clientmod.core.trace.ObservationSample;
+import io.github.airi.clientmod.core.trace.TraceEvent;
 
 public final class DebugHudObservationStore implements ObservationEmitter {
 	private static final int HISTORY_LIMIT = 32;
@@ -18,7 +19,11 @@ public final class DebugHudObservationStore implements ObservationEmitter {
 	private long firstCapturedAtMillis;
 
 	@Override
-	public void emit(ObservationSample sample) {
+	public void emit(TraceEvent event) {
+		if (!(event instanceof ObservationSample sample)) {
+			return;
+		}
+
 		if (firstCapturedAtMillis == 0L) {
 			firstCapturedAtMillis = sample.capturedAtMillis();
 		}
