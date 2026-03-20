@@ -9,7 +9,9 @@
     "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {
-    "@airi-client-mod/hub-runtime": "workspace:*"
+    "@airi-client-mod/hub-runtime": "workspace:*",
+    "crossws": "^0.4.4",
+    "h3": "^2.0.1-rc.14"
   },
   "main": "./dist/index.js",
   "exports": {

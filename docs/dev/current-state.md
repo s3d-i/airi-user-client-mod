@@ -45,7 +45,18 @@ If you need a broader Gradle validation pass, run:
 
 ## How To Run It Manually
 
-Run the current experiment with:
+Start the local TypeScript hub ingress first:
+
+```sh
+pnpm --filter @airi-client-mod/local-hub build
+pnpm --filter @airi-client-mod/local-hub start
+```
+
+That process binds the default ingress endpoint:
+
+`ws://127.0.0.1:8787/ws`
+
+Then run the current Minecraft experiment with:
 
 ```sh
 ./gradlew runClient
@@ -108,7 +119,26 @@ Each `ObservationSample` becomes one raw websocket message with `kind = "observa
 
 The Java transport no longer owns queueing, reconnect backoff, multi-consumer fanout, or AIRI host-protocol semantics.
 
-### 4. Transport Observability
+### 4. Local TypeScript Hub Ingress
+
+`dev/refactor-node` now also contains a real local TypeScript ingress process.
+
+That path is composed as:
+
+- `apps/local-hub` as the executable Node composition root
+- `packages/hub-ingress-ws` as the websocket ingress server
+- `packages/hub-runtime` as the first typed runtime ingestion surface
+
+Today that TypeScript side owns:
+
+- a websocket server on `ws://127.0.0.1:8787/ws`
+- one-message-per-event plain JSON ingress
+- minimal structural validation for `observation.sample`
+- runtime ingestion into a minimal snapshot with `traceCount`, `latestObservation`, and `lastAcceptedAt`
+
+That TypeScript side still does not own detector execution, scorer execution, episode lifecycle logic, replay storage, or active AIRI bridge behavior.
+
+### 5. Transport Observability
 
 `dev/refactor-node` also includes transport-focused runtime visibility:
 
@@ -121,9 +151,10 @@ That observability is real and useful, but it is still scoped to runtime transpo
 
 The following architecture pieces are not implemented in `dev/refactor-node` yet:
 
-- blackboard materialization behind that hub
+- blackboard materialization behind the new local hub ingress
 - detector and scorer execution behind that hub
 - stable behavior episode publication
+- AIRI bridge publishing behavior and inbound event handling
 - replay artifacts and replay-driven debugging workflow
 - broader shared-core extraction beyond the current thin capture/trace contracts
 - simultaneous multi-version release flow
@@ -138,4 +169,4 @@ When you need to understand the code in `dev/refactor-node`, assume:
 - `dev/refactor-node` is Java-first for the mod, with a pnpm workspace also present in-repo
 - `dev/refactor-node` is still using a direct websocket client in the mod
 - `dev/refactor-node` keeps the websocket transport in the Java version module for now
-- `dev/refactor-node` is a capture and transport prototype, not the final repository shape
+- `dev/refactor-node` now has a real local TypeScript hub ingress, but it is still only a transport and runtime-ingestion slice rather than the full reasoning pipeline

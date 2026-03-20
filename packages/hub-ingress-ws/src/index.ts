@@ -1,24 +1,13 @@
-import type { HubRuntime } from "@airi-client-mod/hub-runtime";
+export type {
+  TraceDecodeFailure,
+  TraceDecodeResult,
+  TraceDecodeSuccess
+} from "./adapter/index.js";
+export { decodeRawTraceEvent, parseRawTraceEventMessage } from "./adapter/index.js";
 
-export type { IngressWsFrame } from "./adapter/index.js";
-export type { HubIngressWsServerOptions } from "./server/index.js";
-
-import type { IngressWsFrame } from "./adapter/index.js";
-import type { HubIngressWsServerOptions } from "./server/index.js";
-
-export interface HubIngressWsServer {
-  readonly options: HubIngressWsServerOptions;
-  ingest(frame: IngressWsFrame): void;
-}
-
-export function createHubIngressWs(
-  runtime: Pick<HubRuntime, "acceptTrace">,
-  options: HubIngressWsServerOptions
-): HubIngressWsServer {
-  return {
-    options,
-    ingest(frame) {
-      runtime.acceptTrace(frame.event);
-    }
-  };
-}
+export type {
+  HubIngressWsBoundAddress,
+  HubIngressWsServer,
+  HubIngressWsServerOptions
+} from "./server/index.js";
+export { createHubIngressWs, createHubIngressWsServer } from "./server/index.js";

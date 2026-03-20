@@ -44,6 +44,16 @@ The initial raw trace message shape is:
 
 The Java transport should not batch multiple samples into one message or derive higher-level semantics inside the transport adapter.
 
+## Current Implementation Shape
+
+The current in-repo implementation keeps the boundary split across three packages:
+
+- `packages/hub-ingress-ws` owns the websocket listener, plain-JSON frame decode, minimal structural validation, and handoff into `hub-runtime`
+- `packages/hub-runtime` owns the typed raw trace event and the minimal runtime snapshot proving ingestion
+- `apps/local-hub` owns process composition, startup, shutdown, and the stable local bind target
+
+The Node-side websocket server uses `crossws` with `h3` so the ingress stack stays aligned with the upstream Node websocket family used in `../airi`.
+
 ## What Stays In The Mod
 
 The Minecraft mod owns:
@@ -58,6 +68,8 @@ The Minecraft mod owns:
 The TypeScript hub owns:
 
 - websocket ingress handling
+- websocket server lifecycle on the local bind target
+- plain JSON message decode and minimal structural validation
 - internal fanout and routing
 - projection rebuilding
 - detector and scorer execution
