@@ -26,7 +26,24 @@ The root project is now an aggregator and shared-conventions layer.
 
 `core/` is intentionally thin shared Java capture/trace infrastructure. It currently holds only shared observation contracts and does not contain detector logic, Minecraft/Fabric adapters, OTel wiring, or websocket transport state.
 
-## How To Run It
+## How To Check It
+
+For non-interactive validation such as CI or coding-agent checks, prefer static commands:
+
+```sh
+pnpm typecheck
+./gradlew compileClientJava
+```
+
+If you need a broader Gradle validation pass, run:
+
+```sh
+./gradlew build
+```
+
+`./gradlew runClient` is not part of the default check flow. It launches an interactive Minecraft client and is intended for manual runtime validation.
+
+## How To Run It Manually
 
 Run the current experiment with:
 
