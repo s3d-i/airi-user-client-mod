@@ -4,7 +4,7 @@
 
 This document describes the target architecture for `airi-user-client-mod`.
 
-It does not describe the current branch implementation in detail. For that, read [Current Branch State](./current-state.md) first.
+For the current implementation state, read [Current Implementation State](../dev/current-state.md).
 
 ## One-Sentence Shape
 

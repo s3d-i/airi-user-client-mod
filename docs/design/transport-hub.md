@@ -1,19 +1,5 @@
 # Transport Hub
 
-## Status In This Branch
-
-This branch does not contain the local TypeScript hub yet.
-
-Today the Java client mod still owns:
-
-- the websocket client
-- queueing
-- reconnect policy
-- payload serialization
-- transport telemetry wiring
-
-That is acceptable for this experiment branch, but it is not the long-term boundary.
-
 ## Target Boundary
 
 The Minecraft client mod should publish one raw trace stream to one local websocket endpoint.
@@ -53,12 +39,6 @@ The hub should own:
 - replay-oriented persistence or trace handling
 - outbound bridge alignment with AIRI's service protocol stack
 - composition of runtime observability surfaces
-
-## Current Gap
-
-The current branch already points toward this boundary, but it has not crossed it.
-
-Right now the mod publishes a coarse websocket payload directly from Java. The next architectural step is not "add more downstream logic to Java transport." The next step is "move that responsibility behind the local TypeScript hub."
 
 ## Integration Direction
 

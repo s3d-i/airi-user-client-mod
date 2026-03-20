@@ -215,9 +215,3 @@ Those belong in projection, detector, or episode layers.
 - reserve `...changed` or `...transition` for state changes
 - reserve `...sample` for bounded periodic snapshots
 - add new event kinds only when they improve replay, debugging, or downstream projection quality
-
-## Relation To This Branch
-
-The current implementation is intentionally much narrower than this taxonomy.
-
-Today the branch emits a coarse `observation.sample` payload with movement, dimension, fps, and target description. This document describes the event model the project should grow toward once capture moves beyond the current experiment.

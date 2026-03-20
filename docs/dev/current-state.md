@@ -1,10 +1,10 @@
-# Current Branch State
+# Current Implementation State
 
 ## Purpose
 
-This document records what this branch actually implements today.
+This document records what `dev/refactor-node` implements today.
 
-Read this before reading the target architecture docs. The target docs describe where the project should go; this document describes what contributors are really standing on right now.
+Read this alongside the design docs in [`../design/`](../design/README.md). The design docs describe the intended system shape; this document describes current implementation reality.
 
 ## Repository Shape
 
@@ -23,6 +23,26 @@ Today the repository does not contain:
 - a shared core module split out from version-specific Fabric adapters
 - a multi-version release layout
 
+## How To Run It
+
+Run the current experiment with:
+
+```sh
+./gradlew runClient
+```
+
+To forward websocket transport and console-exported transport metrics into the client runtime:
+
+```sh
+./gradlew runClient \
+  -Dairi.transport.ws.uri=ws://127.0.0.1:8787/ws \
+  -Dairi.otel.enabled=true \
+  -Dairi.otel.metrics.exporter=console \
+  -Dairi.otel.metrics.export.interval.millis=5000
+```
+
+Once the client is in a world, press `F3`. The left debug panel should show an `[AIRI] observation emit` block with the latest sampled values and transport state.
+
 ## Implemented Pieces
 
 ### 1. Client Capture Loop
@@ -37,11 +57,11 @@ That payload currently includes coarse movement and target-facing data such as:
 - fps
 - target description
 
-This is still a minimal sampling experiment, not the fuller event taxonomy described elsewhere in the docs.
+This is still a minimal sampling experiment, not the fuller event taxonomy described in [`../design/capture-event-taxonomy.md`](../design/capture-event-taxonomy.md).
 
 ### 2. Local Debug Surface
 
-The current branch already has a useful local inspection path:
+`dev/refactor-node` already has a useful local inspection path:
 
 - recent observations are stored in-memory
 - the latest state is rendered into the vanilla debug HUD
@@ -61,11 +81,11 @@ That Java transport layer currently handles:
 - payload serialization
 - send latency and failure tracking
 
-This means the current branch is still transport-heavy on the Java side.
+This is the main implementation gap relative to the transport boundary described in [`../design/transport-hub.md`](../design/transport-hub.md).
 
 ### 4. Transport Observability
 
-The current branch also includes transport-focused runtime visibility:
+`dev/refactor-node` also includes transport-focused runtime visibility:
 
 - local transport status state for debug display
 - OTel transport metrics for queue depth, reconnects, drops, send latency, and failures
@@ -74,7 +94,7 @@ That observability is real and useful, but it is still scoped to runtime transpo
 
 ## What Is Missing
 
-The following architecture pieces are not implemented in this branch yet:
+The following architecture pieces are not implemented in `dev/refactor-node` yet:
 
 - a local TypeScript trace hub in this repository
 - blackboard materialization behind that hub
@@ -86,22 +106,11 @@ The following architecture pieces are not implemented in this branch yet:
 
 ## Practical Reading Rule
 
-When a doc says "should" or "target," treat it as design direction for main.
+When a doc says `should` or `target`, treat it as design direction rather than a statement about current implementation.
 
-When you need to understand the code in this branch, assume:
+When you need to understand the code in `dev/refactor-node`, assume:
 
-- the branch is single-version
-- the branch is Java-first
-- the branch is still using a direct websocket client in the mod
-- the branch is a capture and transport prototype, not the final repository shape
-
-## Why This Document Exists
-
-Without an explicit current-state doc, it is too easy to read the target architecture docs and assume the repository already contains:
-
-- a TypeScript hub
-- a clean core and adapter split
-- multi-version release support
-- downstream boundary separation that is not actually present yet
-
-This document is meant to prevent that confusion.
+- `dev/refactor-node` is single-version
+- `dev/refactor-node` is Java-first
+- `dev/refactor-node` is still using a direct websocket client in the mod
+- `dev/refactor-node` is a capture and transport prototype, not the final repository shape
