@@ -3,6 +3,8 @@ package io.github.airi.clientmod.transport;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.concurrent.CompletionStage;
 
 import io.github.airi.clientmod.AiriUserClientMod;
@@ -13,9 +15,12 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	private static final String HUB_INGRESS_WS_URI_PROPERTY = "airi.hub.ingress.ws.uri";
 	private static final String LEGACY_WS_URI_PROPERTY = "airi.transport.ws.uri";
 	private static final String DEFAULT_WS_URI = "ws://127.0.0.1:8787/ws";
+	// Keep a bounded backlog so reconnects and slow sends do not create avoidable trace gaps.
+	private static final int MAX_PENDING_MESSAGES = 128;
 	private static final long CONNECT_ATTEMPT_GUARD_MILLIS = 1000L;
 
 	private final HttpClient httpClient = HttpClient.newHttpClient();
+	private final Deque<String> pendingMessages = new ArrayDeque<>();
 	private final TransportStatusStore statusStore;
 	private final TransportTelemetry telemetry;
 	private final URI endpointUri;
@@ -24,6 +29,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	private WebSocket webSocket;
 	private boolean connectInFlight;
 	private boolean sendInFlight;
+	private String inFlightMessage;
 	private long connectAttemptStartedAtMillis;
 	private long lastConnectAttemptAtMillis;
 
@@ -44,44 +50,202 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 
 	@Override
 	public void emit(ObservationSample sample) {
+		synchronized (this) {
+			enqueueMessageLocked(serializeObservationSample(sample));
+		}
+
+		connectIfNeeded();
+		drainQueue();
+	}
+
+	private void drainQueue() {
 		WebSocket socketToUse;
-		String skipReason;
+		String message;
 		long sendStartedAtMillis = System.currentTimeMillis();
-		String message = serializeObservationSample(sample);
 
 		synchronized (this) {
-			if (webSocket != null && !sendInFlight) {
-				socketToUse = webSocket;
-				skipReason = null;
-				sendInFlight = true;
-			} else if (sendInFlight) {
-				socketToUse = null;
-				skipReason = "hub ingress websocket busy; sample skipped";
-			} else {
-				socketToUse = null;
-				skipReason = "hub ingress websocket not open; sample skipped";
-			}
-		}
-
-		if (socketToUse == null) {
-			statusStore.recordSendSkipped(skipReason);
-			connectIfNeeded();
-			return;
-		}
-
-		socketToUse.sendText(message, true).whenComplete((ignored, error) -> {
-			if (error != null) {
-				handleSendFailure(socketToUse, error);
+			if (webSocket == null || sendInFlight || pendingMessages.isEmpty()) {
 				return;
 			}
 
-			long latencyMillis = Math.max(0L, System.currentTimeMillis() - sendStartedAtMillis);
-			synchronized (this) {
-				sendInFlight = false;
+			socketToUse = webSocket;
+			message = pendingMessages.removeFirst();
+			inFlightMessage = message;
+			sendInFlight = true;
+		}
+
+		try {
+			socketToUse.sendText(message, true).whenComplete((ignored, error) -> {
+				if (error != null) {
+					handleSendFailure(socketToUse, error);
+					return;
+				}
+
+				long latencyMillis = Math.max(0L, System.currentTimeMillis() - sendStartedAtMillis);
+				synchronized (this) {
+					sendInFlight = false;
+					inFlightMessage = null;
+				}
+				statusStore.recordSendSuccess(latencyMillis);
+				telemetry.onSendSucceeded(latencyMillis);
+				drainQueue();
+			});
+		} catch (RuntimeException error) {
+			handleSendFailure(socketToUse, error);
+		}
+	}
+
+	private void enqueueMessageLocked(String message) {
+		if (pendingMessages.size() >= MAX_PENDING_MESSAGES) {
+			pendingMessages.removeFirst();
+			statusStore.recordSendSkipped("hub ingress backlog full; dropped oldest queued sample");
+		}
+
+		pendingMessages.addLast(message);
+	}
+
+	private boolean restoreInFlightMessageLocked() {
+		if (inFlightMessage == null) {
+			return !pendingMessages.isEmpty();
+		}
+
+		if (pendingMessages.size() >= MAX_PENDING_MESSAGES) {
+			pendingMessages.removeFirst();
+			statusStore.recordSendSkipped("hub ingress backlog full; dropped oldest queued sample");
+		}
+
+		pendingMessages.addFirst(inFlightMessage);
+		inFlightMessage = null;
+		return true;
+	}
+
+	private void tryReconnectAndDrain() {
+		connectIfNeeded();
+		drainQueue();
+	}
+
+	private void handleSendFailure(WebSocket failingSocket, Throwable error) {
+		boolean shouldHandle;
+		boolean shouldAbort = false;
+		boolean shouldReconnect;
+
+		synchronized (this) {
+			shouldHandle = sendInFlight || webSocket == failingSocket;
+			if (!shouldHandle) {
+				return;
 			}
-			statusStore.recordSendSuccess(latencyMillis);
-			telemetry.onSendSucceeded(latencyMillis);
-		});
+
+			sendInFlight = false;
+			shouldReconnect = restoreInFlightMessageLocked();
+			if (webSocket == failingSocket) {
+				webSocket = null;
+				shouldAbort = true;
+				shouldReconnect = true;
+			}
+		}
+
+		if (shouldAbort) {
+			try {
+				failingSocket.abort();
+			} catch (RuntimeException ignored) {
+			}
+		}
+
+		String message = summarize(error);
+		statusStore.recordSendFailure("send failed: " + message);
+		TransportStateTransition transition = statusStore.markError("send failed: " + message);
+		telemetry.onStateChanged(transition);
+		telemetry.onConnectionFailure("send", error, -1L);
+		AiriUserClientMod.LOGGER.warn("Hub ingress websocket send failed: {}", message);
+
+		if (shouldReconnect) {
+			tryReconnectAndDrain();
+		}
+	}
+
+	private void handleOpen(WebSocket socket) {
+		long connectDurationMillis;
+
+		synchronized (this) {
+			connectDurationMillis = finishConnectAttemptLocked();
+			webSocket = socket;
+			connectInFlight = false;
+			sendInFlight = false;
+		}
+
+		TransportStateTransition transition = statusStore.markOpen();
+		telemetry.onStateChanged(transition);
+		telemetry.onConnectionOpened(connectDurationMillis);
+		AiriUserClientMod.LOGGER.info("Hub ingress websocket connected to {}", endpointUri);
+		drainQueue();
+	}
+
+	private void handleClosed(WebSocket socket, int statusCode, String reason) {
+		TransportStateTransition transition;
+		String closeReason = summarizeClose(statusCode, reason);
+		boolean wasSending;
+		boolean shouldReconnect;
+
+		synchronized (this) {
+			if (webSocket != socket) {
+				return;
+			}
+
+			wasSending = sendInFlight;
+			webSocket = null;
+			connectInFlight = false;
+			sendInFlight = false;
+			shouldReconnect = restoreInFlightMessageLocked();
+			transition = statusCode == WebSocket.NORMAL_CLOSURE
+				? statusStore.markDisconnected(closeReason)
+				: statusStore.markError(closeReason);
+		}
+
+		if (wasSending) {
+			statusStore.recordSendFailure("send failed: " + closeReason);
+			telemetry.onConnectionFailure("send", null, -1L);
+		}
+		telemetry.onStateChanged(transition);
+		telemetry.onConnectionClosed(statusCode);
+		if (statusCode == WebSocket.NORMAL_CLOSURE) {
+			AiriUserClientMod.LOGGER.info("Hub ingress websocket closed: {}", closeReason);
+		} else {
+			AiriUserClientMod.LOGGER.warn("Hub ingress websocket closed: {}", closeReason);
+		}
+
+		if (shouldReconnect) {
+			tryReconnectAndDrain();
+		}
+	}
+
+	private void handleSocketError(WebSocket socket, Throwable error) {
+		TransportStateTransition transition;
+		boolean wasSending;
+		boolean shouldReconnect;
+
+		synchronized (this) {
+			if (webSocket != socket) {
+				return;
+			}
+
+			wasSending = sendInFlight;
+			webSocket = null;
+			connectInFlight = false;
+			sendInFlight = false;
+			shouldReconnect = restoreInFlightMessageLocked();
+			transition = statusStore.markError("socket error: " + summarize(error));
+		}
+
+		if (wasSending) {
+			statusStore.recordSendFailure("send failed: " + summarize(error));
+			telemetry.onConnectionFailure("send", error, -1L);
+		}
+		telemetry.onStateChanged(transition);
+		AiriUserClientMod.LOGGER.warn("Hub ingress websocket error: {}", summarize(error));
+
+		if (shouldReconnect) {
+			tryReconnectAndDrain();
+		}
 	}
 
 	private void connectIfNeeded() {
@@ -132,111 +296,6 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		telemetry.onStateChanged(transition);
 		telemetry.onConnectionFailure("connect", error, connectDurationMillis);
 		AiriUserClientMod.LOGGER.warn("Hub ingress websocket connect failed: {}", message);
-	}
-
-	private void handleSendFailure(WebSocket failingSocket, Throwable error) {
-		boolean shouldHandle;
-		boolean shouldAbort = false;
-
-		synchronized (this) {
-			shouldHandle = sendInFlight || webSocket == failingSocket;
-			sendInFlight = false;
-			if (webSocket == failingSocket) {
-				webSocket = null;
-				shouldAbort = true;
-			}
-		}
-
-		if (!shouldHandle) {
-			return;
-		}
-
-		if (shouldAbort) {
-			try {
-				failingSocket.abort();
-			} catch (RuntimeException ignored) {
-			}
-		}
-
-		String message = summarize(error);
-		statusStore.recordSendFailure("send failed: " + message);
-		TransportStateTransition transition = statusStore.markError("send failed: " + message);
-		telemetry.onStateChanged(transition);
-		telemetry.onConnectionFailure("send", error, -1L);
-		AiriUserClientMod.LOGGER.warn("Hub ingress websocket send failed: {}", message);
-	}
-
-	private void handleOpen(WebSocket socket) {
-		long connectDurationMillis;
-
-		synchronized (this) {
-			connectDurationMillis = finishConnectAttemptLocked();
-			webSocket = socket;
-			connectInFlight = false;
-			sendInFlight = false;
-		}
-
-		TransportStateTransition transition = statusStore.markOpen();
-		telemetry.onStateChanged(transition);
-		telemetry.onConnectionOpened(connectDurationMillis);
-		AiriUserClientMod.LOGGER.info("Hub ingress websocket connected to {}", endpointUri);
-	}
-
-	private void handleClosed(WebSocket socket, int statusCode, String reason) {
-		TransportStateTransition transition;
-		String closeReason = summarizeClose(statusCode, reason);
-		boolean wasSending;
-
-		synchronized (this) {
-			if (webSocket != socket) {
-				return;
-			}
-
-			wasSending = sendInFlight;
-			webSocket = null;
-			connectInFlight = false;
-			sendInFlight = false;
-			transition = statusCode == WebSocket.NORMAL_CLOSURE
-				? statusStore.markDisconnected(closeReason)
-				: statusStore.markError(closeReason);
-		}
-
-		if (wasSending) {
-			statusStore.recordSendFailure("send failed: " + closeReason);
-			telemetry.onConnectionFailure("send", null, -1L);
-		}
-		telemetry.onStateChanged(transition);
-		telemetry.onConnectionClosed(statusCode);
-		if (statusCode == WebSocket.NORMAL_CLOSURE) {
-			AiriUserClientMod.LOGGER.info("Hub ingress websocket closed: {}", closeReason);
-			return;
-		}
-
-		AiriUserClientMod.LOGGER.warn("Hub ingress websocket closed: {}", closeReason);
-	}
-
-	private void handleSocketError(WebSocket socket, Throwable error) {
-		TransportStateTransition transition;
-		boolean wasSending;
-
-		synchronized (this) {
-			if (webSocket != socket) {
-				return;
-			}
-
-			wasSending = sendInFlight;
-			webSocket = null;
-			connectInFlight = false;
-			sendInFlight = false;
-			transition = statusStore.markError("socket error: " + summarize(error));
-		}
-
-		if (wasSending) {
-			statusStore.recordSendFailure("send failed: " + summarize(error));
-			telemetry.onConnectionFailure("send", error, -1L);
-		}
-		telemetry.onStateChanged(transition);
-		AiriUserClientMod.LOGGER.warn("Hub ingress websocket error: {}", summarize(error));
 	}
 
 	private static URI resolveEndpointUri() {
