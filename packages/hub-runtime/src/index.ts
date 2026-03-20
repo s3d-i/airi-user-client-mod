@@ -1,21 +1,48 @@
+import { createNoopHubLogger, type HubLogger } from "./logging/index.js";
 import type { ProjectionState } from "./projection/index.js";
 import type { ObservationSampleTraceEvent, RawTraceEvent } from "./trace/index.js";
 
 export type { DetectorSignal } from "./detector/index.js";
 export type { EpisodeOutput } from "./episode/index.js";
+export type {
+  HubLogEntry,
+  HubLogFields,
+  HubLogger,
+  HubLogLevel
+} from "./logging/index.js";
+export { createNoopHubLogger } from "./logging/index.js";
 export type { ProjectionState } from "./projection/index.js";
 export type {
+  CurrentModObservationSampleTraceEvent,
+  CurrentModObservationSampleTracePayload,
+  CurrentModTraceEvent,
   ObservationSampleTraceEvent,
   ObservationSampleTracePayload,
+  RawTraceDecodeFailure,
+  RawTraceDecodeResult,
+  RawTraceDecodeSuccess,
   RawTraceEvent
 } from "./trace/index.js";
+export {
+  CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE,
+  CURRENT_MOD_TRACE_VERSION,
+  decodeCurrentModTraceEvent
+} from "./trace/index.js";
 
-export interface HubRuntime {
+export interface HubTraceSink {
   acceptTrace(event: RawTraceEvent): void;
+}
+
+export interface HubRuntime extends HubTraceSink {
   snapshot(): ProjectionState;
 }
 
-export function createHubRuntime(): HubRuntime {
+export interface CreateHubRuntimeOptions {
+  readonly logger?: HubLogger;
+}
+
+export function createHubRuntime(options: CreateHubRuntimeOptions = {}): HubRuntime {
+  const logger = options.logger ?? createNoopHubLogger("hub.runtime");
   let traceCount = 0;
   let latestObservation: ObservationSampleTraceEvent | undefined;
   let lastAcceptedAt: number | undefined;
@@ -25,6 +52,12 @@ export function createHubRuntime(): HubRuntime {
       traceCount += 1;
       latestObservation = event;
       lastAcceptedAt = Date.now();
+      logger.debug("accepted trace", {
+        kind: event.kind,
+        seq: event.seq,
+        sessionId: event.sessionId,
+        traceCount
+      });
     },
     snapshot() {
       return {

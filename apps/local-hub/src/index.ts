@@ -2,15 +2,29 @@ import { pathToFileURL } from "node:url";
 
 import { createAiriWsBridge } from "@airi-client-mod/airi-ws-bridge";
 import {
+  createHubDebugSurfaceServer,
+  type HubDebugSurfaceServer,
+  type HubDebugSurfaceServerOptions
+} from "@airi-client-mod/hub-debug-surface";
+import {
   createHubIngressWsServer,
   type HubIngressWsServer,
   type HubIngressWsServerOptions
 } from "@airi-client-mod/hub-ingress-ws";
 import {
   createHubRuntime,
+  type HubLogger,
+  type HubTraceSink,
   type HubRuntime,
   type ProjectionState
 } from "@airi-client-mod/hub-runtime";
+import { createHubTraceStore, type HubTraceStore } from "@airi-client-mod/hub-trace-store";
+
+import {
+  createConsoleHubLogSink,
+  createMemoryHubLogBuffer,
+  createStructuredHubLogger
+} from "./logger/index.js";
 
 export const DEFAULT_LOCAL_HUB_INGRESS_OPTIONS = {
   host: "127.0.0.1",
@@ -18,15 +32,28 @@ export const DEFAULT_LOCAL_HUB_INGRESS_OPTIONS = {
   path: "/ws"
 } satisfies HubIngressWsServerOptions;
 
+export const DEFAULT_LOCAL_HUB_DEBUG_SURFACE_OPTIONS = {
+  host: "127.0.0.1",
+  port: 8788,
+  apiBasePath: "/api/debug",
+  feedIntervalMillis: 1000
+} satisfies HubDebugSurfaceServerOptions;
+
 export interface LocalHubAppOptions {
   readonly ingress?: Partial<HubIngressWsServerOptions>;
-  readonly log?: Pick<Console, "error" | "info">;
+  readonly debugSurface?: Partial<HubDebugSurfaceServerOptions>;
+  readonly traceStoreCapacity?: number;
+  readonly logBufferCapacity?: number;
+  readonly logOutput?: Pick<Console, "debug" | "info" | "warn" | "error">;
 }
 
 export interface LocalHubApp {
   readonly bridge: ReturnType<typeof createAiriWsBridge>;
+  readonly debugSurface: HubDebugSurfaceServer;
   readonly ingress: HubIngressWsServer;
+  readonly logger: HubLogger;
   readonly runtime: HubRuntime;
+  readonly traceStore: HubTraceStore;
   snapshot(): ProjectionState;
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -41,22 +68,62 @@ function resolveIngressOptions(
   };
 }
 
+function resolveDebugSurfaceOptions(
+  overrides?: Partial<HubDebugSurfaceServerOptions>
+): HubDebugSurfaceServerOptions {
+  return {
+    ...DEFAULT_LOCAL_HUB_DEBUG_SURFACE_OPTIONS,
+    ...overrides
+  };
+}
+
 function isMainModule(metaUrl: string): boolean {
   const entryPoint = process.argv[1];
   return entryPoint != null && pathToFileURL(entryPoint).href === metaUrl;
 }
 
 export function createLocalHubApp(options: LocalHubAppOptions = {}): LocalHubApp {
-  const logger = options.log ?? console;
-  const runtime = createHubRuntime();
-  const ingress = createHubIngressWsServer(runtime, resolveIngressOptions(options.ingress));
+  const logBuffer = createMemoryHubLogBuffer(options.logBufferCapacity);
+  const logger = createStructuredHubLogger({
+    scope: "local-hub",
+    sinks: [createConsoleHubLogSink(options.logOutput), logBuffer]
+  });
+  const runtime = createHubRuntime({
+    logger: logger.child("runtime")
+  });
+  const traceStore = createHubTraceStore({
+    capacity: options.traceStoreCapacity,
+    logger: logger.child("trace-store")
+  });
+  const traceSink: HubTraceSink = {
+    acceptTrace(event) {
+      runtime.acceptTrace(event);
+      traceStore.acceptTrace(event);
+    }
+  };
+  const ingress = createHubIngressWsServer(traceSink, resolveIngressOptions(options.ingress), {
+    logger: logger.child("ingress")
+  });
   const bridge = createAiriWsBridge();
+  const debugSurface = createHubDebugSurfaceServer(
+    {
+      ingress,
+      runtime,
+      traceStore,
+      logs: logBuffer,
+      logger: logger.child("debug-surface")
+    },
+    resolveDebugSurfaceOptions(options.debugSurface)
+  );
   let started = false;
 
   return {
     bridge,
+    debugSurface,
     ingress,
+    logger,
     runtime,
+    traceStore,
     snapshot() {
       return runtime.snapshot();
     },
@@ -65,19 +132,31 @@ export function createLocalHubApp(options: LocalHubAppOptions = {}): LocalHubApp
         return;
       }
 
-      const address = await ingress.start();
-      started = true;
-      logger.info(`[local-hub] ingress listening on ${address.url}`);
+      await debugSurface.start();
+
+      try {
+        await ingress.start();
+        started = true;
+        logger.info("local hub started", {
+          debugSurfaceUrl: debugSurface.getBoundAddress()?.baseUrl,
+          ingressUrl: ingress.getBoundAddress()?.url
+        });
+      } catch (error) {
+        await debugSurface.stop();
+        throw error;
+      }
     },
     async stop() {
       if (!started) {
+        await debugSurface.stop();
         await ingress.stop();
         return;
       }
 
       started = false;
       await ingress.stop();
-      logger.info("[local-hub] ingress stopped");
+      await debugSurface.stop();
+      logger.info("local hub stopped");
     }
   };
 }
@@ -90,6 +169,7 @@ export async function startLocalHubApp(options?: LocalHubAppOptions): Promise<Lo
 
 async function runAsProcess(): Promise<void> {
   const app = await startLocalHubApp();
+  const processLogger = app.logger.child("process");
   let shutdownPromise: Promise<void> | null = null;
 
   const shutdown = (signal: NodeJS.Signals): Promise<void> => {
@@ -98,9 +178,13 @@ async function runAsProcess(): Promise<void> {
     }
 
     shutdownPromise = (async () => {
-      console.info(`[local-hub] received ${signal}, shutting down`);
+      processLogger.info("received shutdown signal", {
+        signal
+      });
       await app.stop();
-      console.info(`[local-hub] final snapshot ${JSON.stringify(app.snapshot())}`);
+      processLogger.info("final runtime snapshot", {
+        snapshot: app.snapshot()
+      });
     })();
 
     return shutdownPromise;
@@ -108,8 +192,10 @@ async function runAsProcess(): Promise<void> {
 
   const handleSignal = (signal: NodeJS.Signals) => {
     void shutdown(signal).catch(error => {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[local-hub] shutdown failed: ${message}`);
+      processLogger.error("shutdown failed", {
+        error: error instanceof Error ? error.message : String(error),
+        signal
+      });
       process.exitCode = 1;
     });
   };
@@ -122,8 +208,11 @@ if (isMainModule(import.meta.url)) {
   try {
     await runAsProcess();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`[local-hub] failed to start: ${message}`);
+    console.error(
+      `[local-hub.process] failed to start ${JSON.stringify({
+        error: error instanceof Error ? error.message : String(error)
+      })}`
+    );
     process.exitCode = 1;
   }
 }

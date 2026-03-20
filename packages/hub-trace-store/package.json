@@ -1,20 +1,15 @@
 {
-  "name": "@airi-client-mod/local-hub",
+  "name": "@airi-client-mod/hub-trace-store",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
     "clean": "rimraf dist",
-    "start": "node dist/index.js",
     "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {
-    "@airi-client-mod/airi-ws-bridge": "workspace:*",
-    "@airi-client-mod/hub-debug-surface": "workspace:*",
-    "@airi-client-mod/hub-ingress-ws": "workspace:*",
-    "@airi-client-mod/hub-runtime": "workspace:*",
-    "@airi-client-mod/hub-trace-store": "workspace:*"
+    "@airi-client-mod/hub-runtime": "workspace:*"
   },
   "main": "./dist/index.js",
   "exports": {

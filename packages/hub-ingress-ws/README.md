@@ -2,6 +2,6 @@
 
 Websocket transport adapter for local hub ingress.
 
-- Owns websocket listener concerns and adapter-level wire framing for traffic from the mod.
-- Converts incoming frames into typed `hub-runtime` inputs.
-- Does not define gameplay semantics, projections, detector/scorer logic, or episode lifecycle rules.
+- Owns websocket listener lifecycle, text-frame receive, JSON parse, transport counters, and trace handoff.
+- Uses the raw contract and minimal contract gating exported by `hub-runtime` instead of owning long-lived contract boilerplate itself.
+- Does not own trace retention, debug-surface DTO shaping, gameplay semantics, detector/scorer logic, or episode lifecycle rules.

@@ -1,9 +1,12 @@
-import type { HubRuntime } from "@airi-client-mod/hub-runtime";
+import {
+  createNoopHubLogger,
+  decodeCurrentModTraceEvent,
+  type HubLogger,
+  type HubTraceSink
+} from "@airi-client-mod/hub-runtime";
 
 import { plugin as websocketPlugin } from "crossws/server";
 import { defineWebSocketHandler, H3, serve } from "h3";
-
-import { parseRawTraceEventMessage } from "../adapter/index.js";
 
 export interface HubIngressWsServerOptions {
   readonly host: string;
@@ -15,11 +18,29 @@ export interface HubIngressWsBoundAddress extends HubIngressWsServerOptions {
   readonly url: string;
 }
 
+export interface HubIngressWsStatusSnapshot {
+  readonly listening: boolean;
+  readonly startedAt?: number;
+  readonly boundAddress: HubIngressWsBoundAddress | null;
+  readonly connectedPeers: number;
+  readonly acceptedFrames: number;
+  readonly rejectedFrames: number;
+  readonly handoffFailures: number;
+  readonly lastAcceptedAt?: number;
+  readonly lastRejectedAt?: number;
+  readonly lastRejectedReason?: string;
+}
+
+export interface HubIngressWsServerDependencies {
+  readonly logger?: HubLogger;
+}
+
 export interface HubIngressWsServer {
   readonly options: HubIngressWsServerOptions;
   start(): Promise<HubIngressWsBoundAddress>;
   stop(): Promise<void>;
   getBoundAddress(): HubIngressWsBoundAddress | null;
+  status(): HubIngressWsStatusSnapshot;
 }
 
 interface ManagedServerInstance {
@@ -67,12 +88,33 @@ function describeError(error: unknown): string {
 }
 
 export function createHubIngressWsServer(
-  runtime: Pick<HubRuntime, "acceptTrace">,
-  options: HubIngressWsServerOptions
+  traceSink: HubTraceSink,
+  options: HubIngressWsServerOptions,
+  dependencies: HubIngressWsServerDependencies = {}
 ): HubIngressWsServer {
   const resolvedOptions = normalizeOptions(options);
+  const logger = dependencies.logger ?? createNoopHubLogger("hub.ingress");
   let serverInstance: ManagedServerInstance | null = null;
   let boundAddress: HubIngressWsBoundAddress | null = null;
+  let startedAt: number | undefined;
+  let connectedPeers = 0;
+  let acceptedFrames = 0;
+  let rejectedFrames = 0;
+  let handoffFailures = 0;
+  let lastAcceptedAt: number | undefined;
+  let lastRejectedAt: number | undefined;
+  let lastRejectedReason: string | undefined;
+
+  const recordRejection = (reason: string, peerId?: string) => {
+    rejectedFrames += 1;
+    lastRejectedAt = Date.now();
+    lastRejectedReason = reason;
+    logger.warn("rejected ingress frame", {
+      peerId,
+      reason,
+      rejectedFrames
+    });
+  };
 
   return {
     options: resolvedOptions,
@@ -84,7 +126,9 @@ export function createHubIngressWsServer(
       const peers = new Set<{ close?: () => void }>();
       const app = new H3({
         onError(error) {
-          console.error(`[hub-ingress-ws] app error: ${describeError(error)}`);
+          logger.error("ingress app error", {
+            error: describeError(error)
+          });
         }
       });
 
@@ -93,21 +137,57 @@ export function createHubIngressWsServer(
         defineWebSocketHandler({
           open(peer) {
             peers.add(peer);
+            connectedPeers = peers.size;
+            logger.info("peer connected", {
+              connectedPeers,
+              peerId: String(peer.id)
+            });
           },
           close(peer) {
             peers.delete(peer);
+            connectedPeers = peers.size;
+            logger.info("peer disconnected", {
+              connectedPeers,
+              peerId: String(peer.id)
+            });
           },
           message(peer, message) {
-            const result = parseRawTraceEventMessage(message.text());
+            const peerId = String(peer.id);
+            let decodedFrame: unknown;
 
-            if (!result.ok) {
-              console.warn(
-                `[hub-ingress-ws] rejected frame from peer ${peer.id}: ${result.reason}`
-              );
+            try {
+              decodedFrame = JSON.parse(message.text());
+            } catch (error) {
+              recordRejection(`invalid JSON: ${describeError(error)}`, peerId);
               return;
             }
 
-            runtime.acceptTrace(result.event);
+            const result = decodeCurrentModTraceEvent(decodedFrame);
+
+            if (!result.ok) {
+              recordRejection(result.reason, peerId);
+              return;
+            }
+
+            try {
+              traceSink.acceptTrace(result.event);
+              acceptedFrames += 1;
+              lastAcceptedAt = Date.now();
+              logger.debug("accepted ingress frame", {
+                kind: result.event.kind,
+                peerId,
+                seq: result.event.seq,
+                sessionId: result.event.sessionId,
+                acceptedFrames
+              });
+            } catch (error) {
+              handoffFailures += 1;
+              logger.error("failed to hand off decoded trace", {
+                error: describeError(error),
+                handoffFailures,
+                peerId
+              });
+            }
           }
         })
       );
@@ -146,6 +226,10 @@ export function createHubIngressWsServer(
 
       const nextBoundAddress = createBoundAddress(resolvedOptions, instance.url);
       boundAddress = nextBoundAddress;
+      startedAt = Date.now();
+      logger.info("ingress listening", {
+        url: nextBoundAddress.url
+      });
 
       return nextBoundAddress;
     },
@@ -157,11 +241,28 @@ export function createHubIngressWsServer(
       const instance = serverInstance;
       serverInstance = null;
       boundAddress = null;
+      connectedPeers = 0;
+      startedAt = undefined;
 
       await instance.close(true);
+      logger.info("ingress stopped");
     },
     getBoundAddress() {
       return boundAddress;
+    },
+    status() {
+      return {
+        listening: serverInstance != null,
+        startedAt,
+        boundAddress,
+        connectedPeers,
+        acceptedFrames,
+        rejectedFrames,
+        handoffFailures,
+        lastAcceptedAt,
+        lastRejectedAt,
+        lastRejectedReason
+      };
     }
   };
 }

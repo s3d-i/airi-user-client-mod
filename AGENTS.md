@@ -26,15 +26,6 @@ Use `./gradlew runClient` only when you explicitly need in-game runtime behavior
 - verifying the debug HUD output
 - checking live websocket transport behavior
 - confirming behavior after joining a world
+- checking the local debug surface and Vite UI against live traces
 
-To forward websocket transport and console-exported transport metrics into the client runtime:
-
-```sh
-./gradlew runClient \
-  -Dairi.transport.ws.uri=ws://127.0.0.1:8787/ws \
-  -Dairi.otel.enabled=true \
-  -Dairi.otel.metrics.exporter=console \
-  -Dairi.otel.metrics.export.interval.millis=5000
-```
-
-Once the client is in a world, press `F3`. The left debug panel should show an `[AIRI] observation emit` block with the latest sampled values and transport state.
+Agents should not execute manual runtime validations

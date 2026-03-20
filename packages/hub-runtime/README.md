@@ -2,6 +2,7 @@
 
 Domain package for the local hub reasoning pipeline.
 
-- Owns raw trace types, projection state, detector support, and episode outputs.
-- Accepts typed trace events from adapters and keeps those domain types transport-agnostic.
-- Does not own websocket listener code, websocket framing, or AIRI-facing bridge code.
+- Owns the initial/current-state raw mod ingress contract, runtime state evolution, detector support, and episode outputs.
+- Keeps the raw trace contract aligned to the Java mod's current emit shape and exposes minimal hand-written contract gating.
+- Exposes only injectable logging contracts, not concrete logger implementations.
+- Does not own websocket listener code, trace retention, debug-surface DTOs, or AIRI-facing bridge code.

@@ -24,7 +24,7 @@ The mod may override that endpoint with:
 
 One `ObservationSample` becomes one raw websocket message.
 
-The initial raw trace message shape is:
+The initial/current-state raw trace message shape is:
 
 - `v`
 - `kind = "observation.sample"`
@@ -46,11 +46,15 @@ The Java transport should not batch multiple samples into one message or derive 
 
 ## Current Implementation Shape
 
-The current in-repo implementation keeps the boundary split across three packages:
+The current in-repo implementation keeps the boundary split across five packages/apps:
 
-- `packages/hub-ingress-ws` owns the websocket listener, plain-JSON frame decode, minimal structural validation, and handoff into `hub-runtime`
-- `packages/hub-runtime` owns the typed raw trace event and the minimal runtime snapshot proving ingestion
-- `apps/local-hub` owns process composition, startup, shutdown, and the stable local bind target
+- `packages/hub-runtime` owns the initial/current-state typed raw ingress contract, minimal hand-written contract gating, and the minimal runtime snapshot proving ingestion
+- `packages/hub-ingress-ws` owns websocket listener lifecycle, text-frame receive, plain JSON decode, transport counters, and handoff into the composed trace sink
+- `packages/hub-trace-store` owns bounded in-memory trace retention and recent-trace queries
+- `packages/hub-debug-surface` owns the read-only debug HTTP/SSE surface for local inspection
+- `apps/local-hub` owns process composition, startup, shutdown, defaults, and the stable local bind targets
+
+`apps/local-hub-ui` is a separate Vite web app that consumes only the debug surface.
 
 The Node-side websocket server uses `crossws` with `h3` so the ingress stack stays aligned with the upstream Node websocket family used in `../airi`.
 
@@ -71,9 +75,11 @@ The TypeScript hub owns:
 - websocket server lifecycle on the local bind target
 - plain JSON message decode and minimal structural validation
 - internal fanout and routing
-- projection rebuilding
-- detector and scorer execution
-- episode lifecycle logic
+- runtime snapshot evolution
+- bounded trace retention
+- read-only debug surface exposure
+- detector and scorer execution later
+- episode lifecycle logic later
 - AIRI bridge logic and downstream protocol mapping
 - richer observability and downstream composition
 
@@ -83,5 +89,6 @@ This ingress boundary does not include:
 
 - detector, scorer, or episode logic in Java transport
 - AIRI bridge logic in Java transport
+- annotation write APIs or annotation persistence
 - AIRI host envelopes, auth, announce, heartbeat, or local ingress framing that mimics that protocol
 - queue/backoff orchestration as a first-class Java transport subsystem

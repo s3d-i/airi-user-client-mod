@@ -45,18 +45,29 @@ If you need a broader Gradle validation pass, run:
 
 ## How To Run It Manually
 
-Start the local TypeScript hub ingress first:
+Use three terminals for manual runtime validation.
+
+In terminal 1, start the local TypeScript hub composition root first:
 
 ```sh
 pnpm --filter @airi-client-mod/local-hub build
 pnpm --filter @airi-client-mod/local-hub start
 ```
 
-That process binds the default ingress endpoint:
+That process binds the default ingress and debug endpoints:
 
-`ws://127.0.0.1:8787/ws`
+- `ws://127.0.0.1:8787/ws`
+- `http://127.0.0.1:8788/api/debug`
 
-Then run the current Minecraft experiment with:
+In terminal 2, start the separate Vite UI:
+
+```sh
+pnpm --filter @airi-client-mod/local-hub-ui dev
+```
+
+Open `http://127.0.0.1:5174`.
+
+In terminal 3, run the current Minecraft experiment with:
 
 ```sh
 ./gradlew runClient
@@ -75,6 +86,21 @@ To forward websocket transport and console-exported transport metrics into the c
 `airi.transport.ws.uri` still works as a legacy override. If both properties are present, `airi.hub.ingress.ws.uri` wins.
 
 Once the client is in a world, press `F3`. The left debug panel should show an `[AIRI] observation emit` block with the latest sampled values and transport state.
+
+While moving in-world and generating live samples, confirm the browser UI shows:
+
+- `Ingress Status` accepted frame count increasing
+- `Runtime Snapshot` updating
+- `Recent Traces` filling with `observation.sample`
+- `Logger Output` showing ingress/runtime/store activity
+
+For a direct server-side read-only check, you can also query:
+
+```sh
+curl -s http://127.0.0.1:8788/api/debug/state
+curl -s 'http://127.0.0.1:8788/api/debug/traces?limit=5'
+curl -s 'http://127.0.0.1:8788/api/debug/logs?limit=10'
+```
 
 ## Implemented Pieces
 
@@ -127,16 +153,23 @@ That path is composed as:
 
 - `apps/local-hub` as the executable Node composition root
 - `packages/hub-ingress-ws` as the websocket ingress server
-- `packages/hub-runtime` as the first typed runtime ingestion surface
+- `packages/hub-runtime` as the initial/current-state typed runtime ingestion surface
+- `packages/hub-trace-store` as the bounded in-memory retention boundary
+- `packages/hub-debug-surface` as the read-only local inspection surface
+- `apps/local-hub-ui` as the separate Vite debug UI
 
 Today that TypeScript side owns:
 
 - a websocket server on `ws://127.0.0.1:8787/ws`
+- a read-only debug surface on `http://127.0.0.1:8788/api/debug`
 - one-message-per-event plain JSON ingress
 - minimal structural validation for `observation.sample`
 - runtime ingestion into a minimal snapshot with `traceCount`, `latestObservation`, and `lastAcceptedAt`
+- bounded in-memory trace retention behind explicit retained trace IDs
+- structured logs fanned out to console and the debug surface
+- a separate Vite UI that consumes only the debug surface
 
-That TypeScript side still does not own detector execution, scorer execution, episode lifecycle logic, replay storage, or active AIRI bridge behavior.
+That TypeScript side still does not own detector execution, scorer execution, episode lifecycle logic, annotation writes, durable replay storage, or active AIRI bridge behavior.
 
 ### 5. Transport Observability
 
@@ -155,7 +188,8 @@ The following architecture pieces are not implemented in `dev/refactor-node` yet
 - detector and scorer execution behind that hub
 - stable behavior episode publication
 - AIRI bridge publishing behavior and inbound event handling
-- replay artifacts and replay-driven debugging workflow
+- annotation write APIs and annotation persistence model
+- replay artifacts beyond bounded in-memory trace retention and replay-driven debugging workflow
 - broader shared-core extraction beyond the current thin capture/trace contracts
 - simultaneous multi-version release flow
 
@@ -169,4 +203,4 @@ When you need to understand the code in `dev/refactor-node`, assume:
 - `dev/refactor-node` is Java-first for the mod, with a pnpm workspace also present in-repo
 - `dev/refactor-node` is still using a direct websocket client in the mod
 - `dev/refactor-node` keeps the websocket transport in the Java version module for now
-- `dev/refactor-node` now has a real local TypeScript hub ingress, but it is still only a transport and runtime-ingestion slice rather than the full reasoning pipeline
+- `dev/refactor-node` now has a real local TypeScript hub ingress, trace store, debug surface, and Vite debug UI, but it is still only a transport/runtime/debug slice rather than the full reasoning pipeline
