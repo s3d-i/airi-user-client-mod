@@ -1,4 +1,4 @@
-import type { HubRuntime } from "@airi/hub-runtime";
+import type { HubRuntime } from "@airi-client-mod/hub-runtime";
 
 export type { IngressWsFrame } from "./adapter/index.js";
 export type { HubIngressWsServerOptions } from "./server/index.js";

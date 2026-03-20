@@ -3,9 +3,12 @@
   "private": true,
   "packageManager": "pnpm@10.32.1",
   "scripts": {
+    "build": "pnpm --recursive --if-present run build",
+    "clean": "pnpm --recursive --if-present run clean",
     "typecheck": "pnpm --recursive --if-present run typecheck"
   },
   "devDependencies": {
+    "rimraf": "^6.1.0",
     "typescript": "^5.9.3"
   }
 }

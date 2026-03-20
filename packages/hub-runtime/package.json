@@ -1,9 +1,19 @@
 {
-  "name": "@airi/hub-runtime",
+  "name": "@airi-client-mod/hub-runtime",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "clean": "rimraf dist",
     "typecheck": "tsc --project tsconfig.json"
-  }
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts"
 }

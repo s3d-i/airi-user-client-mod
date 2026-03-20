@@ -1,6 +1,6 @@
-import { createAiriWsBridge } from "@airi/airi-ws-bridge";
-import { createHubIngressWs } from "@airi/hub-ingress-ws";
-import { createHubRuntime } from "@airi/hub-runtime";
+import { createAiriWsBridge } from "@airi-client-mod/airi-ws-bridge";
+import { createHubIngressWs } from "@airi-client-mod/hub-ingress-ws";
+import { createHubRuntime } from "@airi-client-mod/hub-runtime";
 
 export interface LocalHubApp {
   readonly bridge: ReturnType<typeof createAiriWsBridge>;

@@ -12,9 +12,9 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@airi/airi-ws-bridge": ["packages/airi-ws-bridge/src/index.ts"],
-      "@airi/hub-ingress-ws": ["packages/hub-ingress-ws/src/index.ts"],
-      "@airi/hub-runtime": ["packages/hub-runtime/src/index.ts"]
+      "@airi-client-mod/airi-ws-bridge": ["packages/airi-ws-bridge/src/index.ts"],
+      "@airi-client-mod/hub-ingress-ws": ["packages/hub-ingress-ws/src/index.ts"],
+      "@airi-client-mod/hub-runtime": ["packages/hub-runtime/src/index.ts"]
     }
   }
 }

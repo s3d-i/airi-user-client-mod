@@ -1,4 +1,4 @@
-import type { EpisodeOutput } from "@airi/hub-runtime";
+import type { EpisodeOutput } from "@airi-client-mod/hub-runtime";
 
 export interface AiriWsBridge {
   publishEpisode(output: EpisodeOutput): Promise<void>;

@@ -1,14 +1,24 @@
 {
-  "name": "@airi/local-hub",
+  "name": "@airi-client-mod/local-hub",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "clean": "rimraf dist",
     "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {
-    "@airi/airi-ws-bridge": "workspace:*",
-    "@airi/hub-ingress-ws": "workspace:*",
-    "@airi/hub-runtime": "workspace:*"
-  }
+    "@airi-client-mod/airi-ws-bridge": "workspace:*",
+    "@airi-client-mod/hub-ingress-ws": "workspace:*",
+    "@airi-client-mod/hub-runtime": "workspace:*"
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts"
 }
