@@ -13,6 +13,10 @@ export interface HubLogEntry {
   readonly fields?: HubLogFields;
 }
 
+export interface HubLogSink {
+  write(entry: HubLogEntry): void;
+}
+
 export interface HubLogger {
   readonly scope: string;
   child(scope: string): HubLogger;
@@ -22,27 +26,6 @@ export interface HubLogger {
   error(message: string, fields?: HubLogFields): void;
 }
 
-export function createNoopHubLogger(scope = "hub"): HubLogger {
-  return {
-    scope,
-    child(childScope) {
-      return createNoopHubLogger(joinScope(scope, childScope));
-    },
-    debug() {
-      return undefined;
-    },
-    info() {
-      return undefined;
-    },
-    warn() {
-      return undefined;
-    },
-    error() {
-      return undefined;
-    }
-  };
-}
-
-function joinScope(parent: string, child: string): string {
-  return parent.length === 0 ? child : `${parent}.${child}`;
+export interface HubLoggerFactory {
+  create(scope: string): HubLogger;
 }

@@ -1,4 +1,4 @@
-import { createNoopHubLogger, type HubLogger } from "./logging/index.js";
+import type { HubLogger } from "./logging/index.js";
 import type { ProjectionState } from "./projection/index.js";
 import type { ObservationSampleTraceEvent, RawTraceEvent } from "./trace/index.js";
 
@@ -8,9 +8,10 @@ export type {
   HubLogEntry,
   HubLogFields,
   HubLogger,
+  HubLoggerFactory,
+  HubLogSink,
   HubLogLevel
 } from "./logging/index.js";
-export { createNoopHubLogger } from "./logging/index.js";
 export type { ProjectionState } from "./projection/index.js";
 export type {
   CurrentModObservationSampleTraceEvent,
@@ -38,11 +39,11 @@ export interface HubRuntime extends HubTraceSink {
 }
 
 export interface CreateHubRuntimeOptions {
-  readonly logger?: HubLogger;
+  readonly logger: HubLogger;
 }
 
-export function createHubRuntime(options: CreateHubRuntimeOptions = {}): HubRuntime {
-  const logger = options.logger ?? createNoopHubLogger("hub.runtime");
+export function createHubRuntime(options: CreateHubRuntimeOptions): HubRuntime {
+  const { logger } = options;
   let traceCount = 0;
   let latestObservation: ObservationSampleTraceEvent | undefined;
   let lastAcceptedAt: number | undefined;

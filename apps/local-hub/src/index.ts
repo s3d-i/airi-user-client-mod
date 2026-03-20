@@ -11,6 +11,7 @@ import {
   type HubIngressWsServer,
   type HubIngressWsServerOptions
 } from "@airi-client-mod/hub-ingress-ws";
+import { createConsoleHubLogSink, createStructuredHubLogger } from "@airi-client-mod/hub-logging";
 import {
   createHubRuntime,
   type HubLogger,
@@ -20,11 +21,7 @@ import {
 } from "@airi-client-mod/hub-runtime";
 import { createHubTraceStore, type HubTraceStore } from "@airi-client-mod/hub-trace-store";
 
-import {
-  createConsoleHubLogSink,
-  createMemoryHubLogBuffer,
-  createStructuredHubLogger
-} from "./logger/index.js";
+import { createMemoryHubLogBuffer } from "./logger/index.js";
 
 export const DEFAULT_LOCAL_HUB_INGRESS_OPTIONS = {
   host: "127.0.0.1",

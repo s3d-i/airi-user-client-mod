@@ -137,7 +137,7 @@ export function App() {
                 wide={true}
               />
               <Stat
-                label="Debug API"
+                label="Ingress URL"
                 value={state.ingress.boundAddress?.url ?? "not bound"}
                 wide={true}
               />

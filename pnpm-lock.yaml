@@ -29,6 +29,9 @@ importers:
       '@airi-client-mod/hub-ingress-ws':
         specifier: workspace:*
         version: link:../../packages/hub-ingress-ws
+      '@airi-client-mod/hub-logging':
+        specifier: workspace:*
+        version: link:../../packages/hub-logging
       '@airi-client-mod/hub-runtime':
         specifier: workspace:*
         version: link:../../packages/hub-runtime
@@ -90,6 +93,12 @@ importers:
       h3:
         specifier: ^2.0.1-rc.14
         version: 2.0.1-rc.17(crossws@0.4.4(srvx@0.11.12))
+
+  packages/hub-logging:
+    dependencies:
+      '@airi-client-mod/hub-runtime':
+        specifier: workspace:*
+        version: link:../hub-runtime
 
   packages/hub-runtime: {}
 

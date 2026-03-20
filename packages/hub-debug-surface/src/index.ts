@@ -2,7 +2,6 @@ import { createServer, type IncomingMessage, type Server as HttpServer, type Ser
 
 import type { HubIngressWsStatusSnapshot } from "@airi-client-mod/hub-ingress-ws";
 import type { HubLogEntry, HubLogger, HubRuntime, ProjectionState } from "@airi-client-mod/hub-runtime";
-import { createNoopHubLogger } from "@airi-client-mod/hub-runtime";
 import type { HubTraceStore, HubTraceStoreSnapshot, RetainedTraceRecord } from "@airi-client-mod/hub-trace-store";
 
 const DEFAULT_DEBUG_STATE_TRACE_LIMIT = 25;
@@ -52,8 +51,10 @@ export interface HubDebugSurfaceServerDependencies {
   readonly runtime: Pick<HubRuntime, "snapshot">;
   readonly traceStore: Pick<HubTraceStore, "listRecent" | "snapshot">;
   readonly logs: HubLogReader;
-  readonly logger?: HubLogger;
+  readonly logger: HubLogger;
 }
+
+type CloseDebugFeedClient = () => void;
 
 export interface HubDebugSurfaceServer {
   readonly options: HubDebugSurfaceServerOptions;
@@ -68,9 +69,10 @@ export function createHubDebugSurfaceServer(
   options: HubDebugSurfaceServerOptions
 ): HubDebugSurfaceServer {
   const resolvedOptions = normalizeOptions(options);
-  const logger = dependencies.logger ?? createNoopHubLogger("hub.debug-surface");
+  const { logger } = dependencies;
   let server: HttpServer | null = null;
   let boundAddress: HubDebugSurfaceBoundAddress | null = null;
+  const activeFeedClients = new Set<CloseDebugFeedClient>();
 
   const buildState = (query: HubDebugSurfaceStateQuery = {}): HubDebugState => {
     const traceLimit = query.traceLimit ?? DEFAULT_DEBUG_STATE_TRACE_LIMIT;
@@ -95,7 +97,7 @@ export function createHubDebugSurfaceServer(
       }
 
       const nextServer = createServer((request, response) => {
-        handleRequest(request, response, resolvedOptions, buildState, logger);
+        handleRequest(request, response, resolvedOptions, buildState, logger, activeFeedClients);
       });
 
       await listen(nextServer, resolvedOptions.host, resolvedOptions.port);
@@ -115,8 +117,16 @@ export function createHubDebugSurfaceServer(
       }
 
       const currentServer = server;
+      const currentFeedClients = [...activeFeedClients];
+
       server = null;
       boundAddress = null;
+
+      activeFeedClients.clear();
+      for (const closeFeedClient of currentFeedClients) {
+        closeFeedClient();
+      }
+
       await closeServer(currentServer);
       logger.info("debug surface stopped");
     },
@@ -180,7 +190,8 @@ function handleRequest(
   response: ServerResponse,
   options: HubDebugSurfaceServerOptions,
   buildState: (query?: HubDebugSurfaceStateQuery) => HubDebugState,
-  logger: HubLogger
+  logger: HubLogger,
+  activeFeedClients: Set<CloseDebugFeedClient>
 ): void {
   setCorsHeaders(response);
 
@@ -254,7 +265,15 @@ function handleRequest(
 
     if (pathname === `${basePath}/feed`) {
       logger.info("opened debug feed client");
-      openStateFeed(request, response, options.feedIntervalMillis, buildState);
+      let closeFeedClient: CloseDebugFeedClient;
+      closeFeedClient = openStateFeed(
+        request,
+        response,
+        options.feedIntervalMillis,
+        buildState,
+        () => activeFeedClients.delete(closeFeedClient)
+      );
+      activeFeedClients.add(closeFeedClient);
       return;
     }
 
@@ -275,8 +294,9 @@ function openStateFeed(
   request: IncomingMessage,
   response: ServerResponse,
   feedIntervalMillis: number,
-  buildState: (query?: HubDebugSurfaceStateQuery) => HubDebugState
-): void {
+  buildState: (query?: HubDebugSurfaceStateQuery) => HubDebugState,
+  onClose?: () => void
+): CloseDebugFeedClient {
   const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
   const query = readStateQuery(requestUrl);
 
@@ -301,6 +321,7 @@ function openStateFeed(
 
     closed = true;
     clearInterval(interval);
+    onClose?.();
     response.end();
   };
 
@@ -308,6 +329,8 @@ function openStateFeed(
   request.on("error", cleanup);
   response.on("close", cleanup);
   response.on("error", cleanup);
+
+  return cleanup;
 }
 
 function renderSseEvent(eventName: string, payload: unknown): string {

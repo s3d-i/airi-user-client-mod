@@ -1,9 +1,4 @@
-import {
-  createNoopHubLogger,
-  type HubLogger,
-  type HubTraceSink,
-  type RawTraceEvent
-} from "@airi-client-mod/hub-runtime";
+import type { HubLogger, HubTraceSink, RawTraceEvent } from "@airi-client-mod/hub-runtime";
 
 const DEFAULT_TRACE_STORE_CAPACITY = 200;
 
@@ -33,16 +28,16 @@ export interface HubTraceStore extends HubTraceSink {
 
 export interface CreateHubTraceStoreOptions {
   readonly capacity?: number;
-  readonly logger?: HubLogger;
+  readonly logger: HubLogger;
 }
 
 export function createHubTraceId(event: RawTraceEvent): string {
   return `${event.sessionId}:${event.seq}`;
 }
 
-export function createHubTraceStore(options: CreateHubTraceStoreOptions = {}): HubTraceStore {
+export function createHubTraceStore(options: CreateHubTraceStoreOptions): HubTraceStore {
   const capacity = normalizeCapacity(options.capacity ?? DEFAULT_TRACE_STORE_CAPACITY);
-  const logger = options.logger ?? createNoopHubLogger("hub.trace-store");
+  const { logger } = options;
   const retained: RetainedTraceRecord[] = [];
   let droppedCount = 0;
   let lastRetainedAt: number | undefined;

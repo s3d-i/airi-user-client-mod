@@ -1,9 +1,4 @@
-import {
-  createNoopHubLogger,
-  decodeCurrentModTraceEvent,
-  type HubLogger,
-  type HubTraceSink
-} from "@airi-client-mod/hub-runtime";
+import { decodeCurrentModTraceEvent, type HubLogger, type HubTraceSink } from "@airi-client-mod/hub-runtime";
 
 import { plugin as websocketPlugin } from "crossws/server";
 import { defineWebSocketHandler, H3, serve } from "h3";
@@ -32,7 +27,7 @@ export interface HubIngressWsStatusSnapshot {
 }
 
 export interface HubIngressWsServerDependencies {
-  readonly logger?: HubLogger;
+  readonly logger: HubLogger;
 }
 
 export interface HubIngressWsServer {
@@ -90,10 +85,10 @@ function describeError(error: unknown): string {
 export function createHubIngressWsServer(
   traceSink: HubTraceSink,
   options: HubIngressWsServerOptions,
-  dependencies: HubIngressWsServerDependencies = {}
+  dependencies: HubIngressWsServerDependencies
 ): HubIngressWsServer {
   const resolvedOptions = normalizeOptions(options);
-  const logger = dependencies.logger ?? createNoopHubLogger("hub.ingress");
+  const { logger } = dependencies;
   let serverInstance: ManagedServerInstance | null = null;
   let boundAddress: HubIngressWsBoundAddress | null = null;
   let startedAt: number | undefined;
