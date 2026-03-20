@@ -210,19 +210,15 @@ export function App() {
             <EmptyState message="No retained traces yet." />
           ) : (
             <div className="list">
-              {state.traces.map(trace => (
-                <div className="list__row" key={trace.traceId}>
+              {state.traces.map((trace, index) => (
+                <div className="list__row" key={`${trace.traceId}:${trace.retainedAtMillis}:${index}`}>
                   <div>
                     <strong>{trace.traceId}</strong>
-                    <p>
-                      {trace.event.kind} · {trace.event.payload.dimensionKey}
-                    </p>
+                    <p>{describeTraceEvent(trace.event)}</p>
                   </div>
                   <div className="list__meta">
                     <span>{formatTimestamp(trace.retainedAtMillis)}</span>
-                    <span>
-                      {formatVec3(trace.event.payload.x, trace.event.payload.y, trace.event.payload.z)}
-                    </span>
+                    <span>{formatTraceCoordinates(trace.event)}</span>
                   </div>
                 </div>
               ))}
@@ -296,4 +292,20 @@ function formatTimestamp(value: number | undefined): string {
 
 function formatVec3(x: number, y: number, z: number): string {
   return `${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}`;
+}
+
+function describeTraceEvent(event: HubDebugState["traces"][number]["event"]): string {
+  if (event.kind === "observation.sample") {
+    return `${event.kind} · ${event.payload.dimensionKey}`;
+  }
+
+  return event.kind;
+}
+
+function formatTraceCoordinates(event: HubDebugState["traces"][number]["event"]): string {
+  if (event.kind !== "observation.sample") {
+    return "n/a";
+  }
+
+  return formatVec3(event.payload.x, event.payload.y, event.payload.z);
 }

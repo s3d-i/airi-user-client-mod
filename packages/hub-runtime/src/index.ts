@@ -14,6 +14,8 @@ export type {
 } from "./logging/index.js";
 export type { ProjectionState } from "./projection/index.js";
 export type {
+  CurrentModSessionEndTraceEvent,
+  CurrentModSessionStartTraceEvent,
   CurrentModObservationSampleTraceEvent,
   CurrentModObservationSampleTracePayload,
   CurrentModTraceEvent,
@@ -22,9 +24,13 @@ export type {
   RawTraceDecodeFailure,
   RawTraceDecodeResult,
   RawTraceDecodeSuccess,
-  RawTraceEvent
+  RawTraceEvent,
+  SessionEndTraceEvent,
+  SessionStartTraceEvent
 } from "./trace/index.js";
 export {
+  CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END,
+  CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START,
   CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE,
   CURRENT_MOD_TRACE_VERSION,
   decodeCurrentModTraceEvent
@@ -35,6 +41,7 @@ export interface HubTraceSink {
 }
 
 export interface HubRuntime extends HubTraceSink {
+  reset(): void;
   snapshot(): ProjectionState;
 }
 
@@ -51,7 +58,9 @@ export function createHubRuntime(options: CreateHubRuntimeOptions): HubRuntime {
   return {
     acceptTrace(event) {
       traceCount += 1;
-      latestObservation = event;
+      if (event.kind === "observation.sample") {
+        latestObservation = event;
+      }
       lastAcceptedAt = Date.now();
       logger.debug("accepted trace", {
         kind: event.kind,
@@ -59,6 +68,15 @@ export function createHubRuntime(options: CreateHubRuntimeOptions): HubRuntime {
         sessionId: event.sessionId,
         traceCount
       });
+    },
+    reset() {
+      logger.info("reset runtime snapshot", {
+        previousTraceCount: traceCount,
+        hadLatestObservation: latestObservation != null
+      });
+      traceCount = 0;
+      latestObservation = undefined;
+      lastAcceptedAt = undefined;
     },
     snapshot() {
       return {

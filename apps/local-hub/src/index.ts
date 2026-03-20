@@ -1,3 +1,11 @@
+import {
+  CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END,
+  createHubRuntime,
+  type HubLogger,
+  type HubTraceSink,
+  type HubRuntime,
+  type ProjectionState
+} from "@airi-client-mod/hub-runtime";
 import { pathToFileURL } from "node:url";
 
 import { createAiriWsBridge } from "@airi-client-mod/airi-ws-bridge";
@@ -12,16 +20,10 @@ import {
   type HubIngressWsServerOptions
 } from "@airi-client-mod/hub-ingress-ws";
 import { createConsoleHubLogSink, createStructuredHubLogger } from "@airi-client-mod/hub-logging";
-import {
-  createHubRuntime,
-  type HubLogger,
-  type HubTraceSink,
-  type HubRuntime,
-  type ProjectionState
-} from "@airi-client-mod/hub-runtime";
 import { createHubTraceStore, type HubTraceStore } from "@airi-client-mod/hub-trace-store";
 
 import { createMemoryHubLogBuffer } from "./logger/index.js";
+import { createRawTraceJsonlWriter } from "./raw-trace/index.js";
 
 export const DEFAULT_LOCAL_HUB_INGRESS_OPTIONS = {
   host: "127.0.0.1",
@@ -39,6 +41,7 @@ export const DEFAULT_LOCAL_HUB_DEBUG_SURFACE_OPTIONS = {
 export interface LocalHubAppOptions {
   readonly ingress?: Partial<HubIngressWsServerOptions>;
   readonly debugSurface?: Partial<HubDebugSurfaceServerOptions>;
+  readonly rawTraceDataDir?: string;
   readonly traceStoreCapacity?: number;
   readonly logBufferCapacity?: number;
   readonly logOutput?: Pick<Console, "debug" | "info" | "warn" | "error">;
@@ -92,8 +95,20 @@ export function createLocalHubApp(options: LocalHubAppOptions = {}): LocalHubApp
     capacity: options.traceStoreCapacity,
     logger: logger.child("trace-store")
   });
+  const rawTraceWriter = createRawTraceJsonlWriter({
+    dataDir: options.rawTraceDataDir,
+    logger: logger.child("raw-trace")
+  });
   const traceSink: HubTraceSink = {
     acceptTrace(event) {
+      rawTraceWriter.acceptTrace(event);
+
+      if (event.kind === CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END) {
+        runtime.reset();
+        traceStore.clear();
+        return;
+      }
+
       runtime.acceptTrace(event);
       traceStore.acceptTrace(event);
     }
@@ -136,7 +151,8 @@ export function createLocalHubApp(options: LocalHubAppOptions = {}): LocalHubApp
         started = true;
         logger.info("local hub started", {
           debugSurfaceUrl: debugSurface.getBoundAddress()?.baseUrl,
-          ingressUrl: ingress.getBoundAddress()?.url
+          ingressUrl: ingress.getBoundAddress()?.url,
+          rawTraceDataDir: rawTraceWriter.dataDir
         });
       } catch (error) {
         await debugSurface.stop();
@@ -147,12 +163,14 @@ export function createLocalHubApp(options: LocalHubAppOptions = {}): LocalHubApp
       if (!started) {
         await debugSurface.stop();
         await ingress.stop();
+        rawTraceWriter.close();
         return;
       }
 
       started = false;
       await ingress.stop();
       await debugSurface.stop();
+      rawTraceWriter.close();
       logger.info("local hub stopped");
     }
   };

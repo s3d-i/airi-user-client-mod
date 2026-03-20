@@ -141,7 +141,17 @@ That Java transport layer is now a thin local-hub ingress adapter. It owns:
 - best-effort connection and send attempts
 - minimal ingress status tracking
 
-Each `ObservationSample` becomes one raw websocket message with `kind = "observation.sample"` and the sampled payload fields.
+The Java mod now emits a narrow raw trace stream with:
+
+- `trace.session.start`
+- `observation.sample`
+- `trace.session.end`
+
+`sessionId` is now created once per Minecraft world session. It starts on Fabric `ClientPlayConnectionEvents.JOIN` and ends on `ClientPlayConnectionEvents.DISCONNECT`, not on websocket sink lifetime and not on dimension change.
+
+If hub ingress websocket connectivity drops mid-session, the mod replays `trace.session.start` after reconnect with the same `sessionId` and original session-start timestamp so the new hub instance can reopen the active raw trace file before later `observation.sample` frames arrive.
+
+Only `observation.sample` carries `worldTick` and the sampled payload fields. The control envelopes stay transport-level.
 
 The Java transport no longer owns queueing, reconnect backoff, multi-consumer fanout, or AIRI host-protocol semantics.
 
@@ -163,13 +173,15 @@ Today that TypeScript side owns:
 - a websocket server on `ws://127.0.0.1:8787/ws`
 - a read-only debug surface on `http://127.0.0.1:8788/api/debug`
 - one-message-per-event plain JSON ingress
-- minimal structural validation for `observation.sample`
+- minimal structural validation for `trace.session.start`, `trace.session.end`, and `observation.sample`
 - runtime ingestion into a minimal snapshot with `traceCount`, `latestObservation`, and `lastAcceptedAt`
 - bounded in-memory trace retention behind explicit retained trace IDs
+- minimal per-session JSONL raw trace files under `apps/local-hub/data/raw-traces` by default
+- session-end reset of the runtime snapshot and recent retained traces so the debug surface/UI naturally clear
 - structured logs fanned out to console and the debug surface
 - a separate Vite UI that consumes only the debug surface
 
-That TypeScript side still does not own detector execution, scorer execution, episode lifecycle logic, annotation writes, durable replay storage, or active AIRI bridge behavior.
+That TypeScript side still does not own detector execution, scorer execution, episode lifecycle logic, annotation writes, database-backed replay storage, or active AIRI bridge behavior.
 
 ### 5. Transport Observability
 
@@ -189,7 +201,7 @@ The following architecture pieces are not implemented in `dev/refactor-node` yet
 - stable behavior episode publication
 - AIRI bridge publishing behavior and inbound event handling
 - annotation write APIs and annotation persistence model
-- replay artifacts beyond bounded in-memory trace retention and replay-driven debugging workflow
+- replay artifacts beyond bounded in-memory trace retention, minimal per-session JSONL raw trace files, and replay-driven debugging workflow
 - broader shared-core extraction beyond the current thin capture/trace contracts
 - simultaneous multi-version release flow
 

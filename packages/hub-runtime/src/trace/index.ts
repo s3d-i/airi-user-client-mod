@@ -1,5 +1,28 @@
 export const CURRENT_MOD_TRACE_VERSION = 1 as const;
+export const CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START = "trace.session.start" as const;
+export const CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END = "trace.session.end" as const;
 export const CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE = "observation.sample" as const;
+
+export type CurrentModTraceKind =
+  | typeof CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START
+  | typeof CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END
+  | typeof CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE;
+
+interface CurrentModTraceEventBase {
+  readonly v: typeof CURRENT_MOD_TRACE_VERSION;
+  readonly kind: CurrentModTraceKind;
+  readonly sessionId: string;
+  readonly seq: number;
+  readonly capturedAtMillis: number;
+}
+
+export interface CurrentModSessionStartTraceEvent extends CurrentModTraceEventBase {
+  readonly kind: typeof CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START;
+}
+
+export interface CurrentModSessionEndTraceEvent extends CurrentModTraceEventBase {
+  readonly kind: typeof CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END;
+}
 
 /**
  * Initial/current-state raw trace contract for local hub ingress.
@@ -23,16 +46,17 @@ export interface CurrentModObservationSampleTracePayload {
 /**
  * Initial/current-state observation sample emitted by the Java mod.
  */
-export interface CurrentModObservationSampleTraceEvent {
-  readonly v: typeof CURRENT_MOD_TRACE_VERSION;
+export interface CurrentModObservationSampleTraceEvent extends CurrentModTraceEventBase {
   readonly kind: typeof CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE;
-  readonly sessionId: string;
-  readonly seq: number;
-  readonly capturedAtMillis: number;
   readonly payload: CurrentModObservationSampleTracePayload;
 }
 
-export type CurrentModTraceEvent = CurrentModObservationSampleTraceEvent;
+export type CurrentModTraceEvent =
+  | CurrentModSessionStartTraceEvent
+  | CurrentModSessionEndTraceEvent
+  | CurrentModObservationSampleTraceEvent;
+export type SessionStartTraceEvent = CurrentModSessionStartTraceEvent;
+export type SessionEndTraceEvent = CurrentModSessionEndTraceEvent;
 export type ObservationSampleTracePayload = CurrentModObservationSampleTracePayload;
 export type ObservationSampleTraceEvent = CurrentModObservationSampleTraceEvent;
 export type RawTraceEvent = CurrentModTraceEvent;
@@ -58,10 +82,6 @@ export function decodeCurrentModTraceEvent(value: unknown): RawTraceDecodeResult
     return { ok: false, reason: "unsupported trace version" };
   }
 
-  if (value.kind !== CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE) {
-    return { ok: false, reason: "unsupported trace kind" };
-  }
-
   if (typeof value.sessionId !== "string" || value.sessionId.length === 0) {
     return { ok: false, reason: "sessionId must be a non-empty string" };
   }
@@ -72,6 +92,36 @@ export function decodeCurrentModTraceEvent(value: unknown): RawTraceDecodeResult
 
   if (!isIntegerNumber(value.capturedAtMillis)) {
     return { ok: false, reason: "capturedAtMillis must be an integer number" };
+  }
+
+  if (value.kind === CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START) {
+    return {
+      ok: true,
+      event: {
+        v: CURRENT_MOD_TRACE_VERSION,
+        kind: CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START,
+        sessionId: value.sessionId,
+        seq: value.seq,
+        capturedAtMillis: value.capturedAtMillis
+      }
+    };
+  }
+
+  if (value.kind === CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END) {
+    return {
+      ok: true,
+      event: {
+        v: CURRENT_MOD_TRACE_VERSION,
+        kind: CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END,
+        sessionId: value.sessionId,
+        seq: value.seq,
+        capturedAtMillis: value.capturedAtMillis
+      }
+    };
+  }
+
+  if (value.kind !== CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE) {
+    return { ok: false, reason: "unsupported trace kind" };
   }
 
   if (!isRecord(value.payload)) {

@@ -22,15 +22,22 @@ The mod may override that endpoint with:
 
 ## Message Contract
 
-One `ObservationSample` becomes one raw websocket message.
+The current raw trace stream contains three message kinds:
 
-The initial/current-state raw trace message shape is:
+- `kind = "trace.session.start"`
+- `kind = "trace.session.end"`
+- `kind = "observation.sample"`
+
+All three carry:
 
 - `v`
-- `kind = "observation.sample"`
+- `kind`
 - `sessionId`
 - `seq`
 - `capturedAtMillis`
+
+Only `observation.sample` carries the sampled payload fields:
+
 - `payload.worldTick`
 - `payload.fps`
 - `payload.dimensionKey`
@@ -41,6 +48,10 @@ The initial/current-state raw trace message shape is:
 - `payload.vy`
 - `payload.vz`
 - `payload.targetDescription`
+
+`sessionId` is scoped to one Minecraft world session, not one websocket sink lifetime. The mod emits `trace.session.start` when entering a world session and `trace.session.end` when leaving that world session.
+
+If the websocket reconnects while that world session is still active, the mod may replay `trace.session.start` with the same `sessionId` and original `capturedAtMillis`. Hub-side consumers must treat same-session repeated starts as idempotent session metadata, not as an implicit rotation.
 
 The Java transport should not batch multiple samples into one message or derive higher-level semantics inside the transport adapter.
 
@@ -77,6 +88,7 @@ The TypeScript hub owns:
 - internal fanout and routing
 - runtime snapshot evolution
 - bounded trace retention
+- minimal per-session JSONL raw trace durability inside `apps/local-hub`
 - read-only debug surface exposure
 - detector and scorer execution later
 - episode lifecycle logic later

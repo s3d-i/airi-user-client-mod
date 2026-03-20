@@ -22,6 +22,7 @@ export interface HubTraceStoreQuery {
 }
 
 export interface HubTraceStore extends HubTraceSink {
+  clear(): void;
   listRecent(query?: HubTraceStoreQuery): readonly RetainedTraceRecord[];
   snapshot(): HubTraceStoreSnapshot;
 }
@@ -70,6 +71,21 @@ export function createHubTraceStore(options: CreateHubTraceStoreOptions): HubTra
         retainedCount: retained.length,
         traceId: record.traceId
       });
+    },
+    clear() {
+      if (retained.length === 0) {
+        logger.debug("cleared retained traces", {
+          retainedCount: 0
+        });
+        lastRetainedAt = undefined;
+        return;
+      }
+
+      logger.info("cleared retained traces", {
+        clearedCount: retained.length
+      });
+      retained.length = 0;
+      lastRetainedAt = undefined;
     },
     listRecent(query = {}) {
       const limit = clampLimit(query.limit, retained.length);

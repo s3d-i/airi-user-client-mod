@@ -8,23 +8,33 @@ import java.util.Deque;
 import java.util.concurrent.CompletionStage;
 
 import io.github.airi.clientmod.AiriUserClientMod;
-import io.github.airi.clientmod.core.trace.ObservationEmitter;
 import io.github.airi.clientmod.core.trace.ObservationSample;
 
-public final class WebSocketObservationSink implements ObservationEmitter {
+public final class WebSocketObservationSink {
 	private static final String HUB_INGRESS_WS_URI_PROPERTY = "airi.hub.ingress.ws.uri";
 	private static final String LEGACY_WS_URI_PROPERTY = "airi.transport.ws.uri";
 	private static final String DEFAULT_WS_URI = "ws://127.0.0.1:8787/ws";
 	// Keep a bounded backlog so reconnects and slow sends do not create avoidable trace gaps.
 	private static final int MAX_PENDING_MESSAGES = 128;
 	private static final long CONNECT_ATTEMPT_GUARD_MILLIS = 1000L;
+	private static final long SESSION_START_SEQUENCE = 1L;
+
+	public interface SessionReplaySupplier {
+		SessionReplay getActiveSession();
+	}
+
+	public record SessionReplay(
+		String sessionId,
+		long startedAtMillis
+	) {
+	}
 
 	private final HttpClient httpClient = HttpClient.newHttpClient();
 	private final Deque<String> pendingMessages = new ArrayDeque<>();
+	private final SessionReplaySupplier sessionReplaySupplier;
 	private final TransportStatusStore statusStore;
 	private final TransportTelemetry telemetry;
 	private final URI endpointUri;
-	private final String sessionId = Long.toUnsignedString(System.currentTimeMillis(), 36);
 
 	private WebSocket webSocket;
 	private boolean connectInFlight;
@@ -32,14 +42,24 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	private String inFlightMessage;
 	private long connectAttemptStartedAtMillis;
 	private long lastConnectAttemptAtMillis;
+	private boolean replayActiveSessionOnNextOpen;
 
 	public WebSocketObservationSink(TransportStatusStore statusStore) {
-		this(statusStore, TransportTelemetry.NOOP);
+		this(statusStore, TransportTelemetry.NOOP, () -> null);
 	}
 
 	public WebSocketObservationSink(TransportStatusStore statusStore, TransportTelemetry telemetry) {
+		this(statusStore, telemetry, () -> null);
+	}
+
+	public WebSocketObservationSink(
+		TransportStatusStore statusStore,
+		TransportTelemetry telemetry,
+		SessionReplaySupplier sessionReplaySupplier
+	) {
 		this.statusStore = statusStore;
 		this.telemetry = telemetry;
+		this.sessionReplaySupplier = sessionReplaySupplier == null ? () -> null : sessionReplaySupplier;
 		this.endpointUri = resolveEndpointUri();
 		this.statusStore.setEndpoint(endpointUri.toString());
 	}
@@ -48,10 +68,21 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		connectIfNeeded();
 	}
 
-	@Override
-	public void emit(ObservationSample sample) {
+	public void emitSessionStart(String sessionId, long sequence, long capturedAtMillis) {
+		enqueueSerializedTrace(serializeSessionControlFrame("trace.session.start", sessionId, sequence, capturedAtMillis));
+	}
+
+	public void emitSessionEnd(String sessionId, long sequence, long capturedAtMillis) {
+		enqueueSerializedTrace(serializeSessionControlFrame("trace.session.end", sessionId, sequence, capturedAtMillis));
+	}
+
+	public void emitObservationSample(String sessionId, ObservationSample sample) {
+		enqueueSerializedTrace(serializeObservationSample(sessionId, sample));
+	}
+
+	private void enqueueSerializedTrace(String message) {
 		synchronized (this) {
-			enqueueMessageLocked(serializeObservationSample(sample));
+			enqueueMessageLocked(message);
 		}
 
 		connectIfNeeded();
@@ -104,6 +135,19 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		pendingMessages.addLast(message);
 	}
 
+	private void enqueuePriorityMessageLocked(String message) {
+		if (pendingMessages.size() >= MAX_PENDING_MESSAGES) {
+			pendingMessages.removeFirst();
+			statusStore.recordSendSkipped("hub ingress backlog full; dropped oldest queued sample");
+		}
+
+		pendingMessages.addFirst(message);
+	}
+
+	private boolean hasQueuedMessageLocked(String message) {
+		return message.equals(inFlightMessage) || pendingMessages.contains(message);
+	}
+
 	private boolean restoreInFlightMessageLocked() {
 		if (inFlightMessage == null) {
 			return !pendingMessages.isEmpty();
@@ -139,6 +183,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			shouldReconnect = restoreInFlightMessageLocked();
 			if (webSocket == failingSocket) {
 				webSocket = null;
+				replayActiveSessionOnNextOpen = true;
 				shouldAbort = true;
 				shouldReconnect = true;
 			}
@@ -165,12 +210,19 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 
 	private void handleOpen(WebSocket socket) {
 		long connectDurationMillis;
+		boolean shouldReplayActiveSession;
 
 		synchronized (this) {
 			connectDurationMillis = finishConnectAttemptLocked();
 			webSocket = socket;
 			connectInFlight = false;
 			sendInFlight = false;
+			shouldReplayActiveSession = replayActiveSessionOnNextOpen;
+			replayActiveSessionOnNextOpen = false;
+		}
+
+		if (shouldReplayActiveSession) {
+			prependActiveSessionReplay(socket);
 		}
 
 		TransportStateTransition transition = statusStore.markOpen();
@@ -195,6 +247,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			webSocket = null;
 			connectInFlight = false;
 			sendInFlight = false;
+			replayActiveSessionOnNextOpen = true;
 			shouldReconnect = restoreInFlightMessageLocked();
 			transition = statusCode == WebSocket.NORMAL_CLOSURE
 				? statusStore.markDisconnected(closeReason)
@@ -232,6 +285,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			webSocket = null;
 			connectInFlight = false;
 			sendInFlight = false;
+			replayActiveSessionOnNextOpen = true;
 			shouldReconnect = restoreInFlightMessageLocked();
 			transition = statusStore.markError("socket error: " + summarize(error));
 		}
@@ -349,7 +403,50 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		return "closed (" + statusCode + "): " + reason;
 	}
 
-	private String serializeObservationSample(ObservationSample sample) {
+	private void prependActiveSessionReplay(WebSocket socket) {
+		SessionReplay sessionReplay = sessionReplaySupplier.getActiveSession();
+		if (sessionReplay == null) {
+			return;
+		}
+
+		String replayMessage = serializeSessionControlFrame(
+			"trace.session.start",
+			sessionReplay.sessionId(),
+			SESSION_START_SEQUENCE,
+			sessionReplay.startedAtMillis()
+		);
+		boolean replayQueued = false;
+
+		synchronized (this) {
+			if (webSocket != socket || hasQueuedMessageLocked(replayMessage)) {
+				return;
+			}
+
+			enqueuePriorityMessageLocked(replayMessage);
+			replayQueued = true;
+		}
+
+		if (replayQueued) {
+			AiriUserClientMod.LOGGER.info(
+				"Replayed active world session start for websocket reconnect: {}",
+				sessionReplay.sessionId()
+			);
+		}
+	}
+
+	private String serializeSessionControlFrame(String kind, String sessionId, long sequence, long capturedAtMillis) {
+		StringBuilder json = new StringBuilder(128);
+		json.append('{');
+		json.append("\"v\":1,");
+		json.append("\"kind\":\"").append(kind).append("\",");
+		json.append("\"sessionId\":\"").append(escapeJson(sessionId)).append("\",");
+		json.append("\"seq\":").append(sequence).append(',');
+		json.append("\"capturedAtMillis\":").append(capturedAtMillis);
+		json.append('}');
+		return json.toString();
+	}
+
+	private String serializeObservationSample(String sessionId, ObservationSample sample) {
 		StringBuilder json = new StringBuilder(320);
 		json.append('{');
 		json.append("\"v\":1,");

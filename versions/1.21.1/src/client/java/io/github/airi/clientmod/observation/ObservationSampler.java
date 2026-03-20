@@ -4,6 +4,8 @@ import java.util.Locale;
 
 import io.github.airi.clientmod.core.trace.ObservationEmitter;
 import io.github.airi.clientmod.core.trace.ObservationSample;
+import io.github.airi.clientmod.session.WorldSessionTracker;
+import io.github.airi.clientmod.transport.WebSocketObservationSink;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
@@ -17,16 +19,23 @@ import net.minecraft.util.math.Vec3d;
 public final class ObservationSampler {
 	public static final int EMIT_INTERVAL_TICKS = 10;
 
-	private final ObservationEmitter emitter;
+	private final ObservationEmitter observationEmitter;
+	private final WebSocketObservationSink rawTraceSink;
+	private final WorldSessionTracker worldSessionTracker;
 	private int ticksUntilEmit = EMIT_INTERVAL_TICKS;
-	private long nextSequence = 1L;
 
-	public ObservationSampler(ObservationEmitter emitter) {
-		this.emitter = emitter;
+	public ObservationSampler(
+		ObservationEmitter observationEmitter,
+		WebSocketObservationSink rawTraceSink,
+		WorldSessionTracker worldSessionTracker
+	) {
+		this.observationEmitter = observationEmitter;
+		this.rawTraceSink = rawTraceSink;
+		this.worldSessionTracker = worldSessionTracker;
 	}
 
 	public void onEndClientTick(MinecraftClient client) {
-		if (client.world == null || client.player == null) {
+		if (client.world == null || client.player == null || !worldSessionTracker.hasActiveSession()) {
 			ticksUntilEmit = EMIT_INTERVAL_TICKS;
 			return;
 		}
@@ -37,13 +46,18 @@ public final class ObservationSampler {
 		}
 
 		ticksUntilEmit = EMIT_INTERVAL_TICKS;
+		WorldSessionTracker.SampleTraceContext traceContext = worldSessionTracker.beginObservationTrace();
+
+		if (traceContext == null) {
+			return;
+		}
 
 		Vec3d position = client.player.getPos();
 		Vec3d velocity = client.player.getVelocity();
 
-		emitter.emit(new ObservationSample(
-			nextSequence++,
-			System.currentTimeMillis(),
+		ObservationSample sample = new ObservationSample(
+			traceContext.sequence(),
+			traceContext.capturedAtMillis(),
 			client.world.getTime(),
 			client.getCurrentFps(),
 			client.world.getRegistryKey().getValue().toString(),
@@ -54,7 +68,9 @@ public final class ObservationSampler {
 			velocity.y,
 			velocity.z,
 			describeTarget(client)
-		));
+		);
+		observationEmitter.emit(sample);
+		rawTraceSink.emitObservationSample(traceContext.sessionId(), sample);
 	}
 
 	private static String describeTarget(MinecraftClient client) {
