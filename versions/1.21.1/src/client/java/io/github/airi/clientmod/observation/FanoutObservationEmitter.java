@@ -3,6 +3,8 @@ package io.github.airi.clientmod.observation;
 import java.util.List;
 
 import io.github.airi.clientmod.AiriUserClientMod;
+import io.github.airi.clientmod.core.trace.ObservationEmitter;
+import io.github.airi.clientmod.core.trace.ObservationSample;
 
 public final class FanoutObservationEmitter implements ObservationEmitter {
 	private final List<ObservationEmitter> emitters;

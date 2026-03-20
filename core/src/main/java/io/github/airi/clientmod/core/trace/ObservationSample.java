@@ -1,4 +1,4 @@
-package io.github.airi.clientmod.observation;
+package io.github.airi.clientmod.core.trace;
 
 public record ObservationSample(
 	long sequence,
@@ -15,4 +15,3 @@ public record ObservationSample(
 	String targetDescription
 ) {
 }
-

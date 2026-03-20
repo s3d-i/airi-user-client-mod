@@ -2,6 +2,8 @@ package io.github.airi.clientmod.observation;
 
 import java.util.Locale;
 
+import io.github.airi.clientmod.core.trace.ObservationEmitter;
+import io.github.airi.clientmod.core.trace.ObservationSample;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;

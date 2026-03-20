@@ -11,20 +11,20 @@ Read this alongside the design docs in [`../design/`](../design/README.md). The 
 Today the repository is:
 
 - one Gradle multi-project build
+- one pnpm workspace rooted at the repository root
 - one Minecraft target: `1.21.1`
 - one Java toolchain target: `21`
-- one real version module today: `:v1_21_1` in `1.21.1/`
+- one thin shared Java module: `:core` in `core/`
+- one real version module today: `:v1_21_1` in `versions/1.21.1/`
 - one mod artifact
 
 Today the repository does not contain:
 
-- a `package.json`
-- a Node or pnpm workspace
-- a local TypeScript websocket hub
-- a shared core module split out from version-specific Fabric adapters
 - a multi-version release layout
 
-The root project is now an aggregator and shared-conventions layer. Behavior is otherwise unchanged.
+The root project is now an aggregator and shared-conventions layer.
+
+`core/` is intentionally thin shared Java capture/trace infrastructure. It currently holds only shared observation contracts and does not contain detector logic, Minecraft/Fabric adapters, OTel wiring, or websocket transport state.
 
 ## How To Run It
 
@@ -75,6 +75,8 @@ This is the most concrete feedback surface currently implemented in-repo.
 
 The Fabric client currently owns websocket publishing directly.
 
+That transport code still lives in the version module under `versions/1.21.1/`. It has not been promoted into `core/`.
+
 That Java transport layer currently handles:
 
 - endpoint resolution
@@ -99,12 +101,11 @@ That observability is real and useful, but it is still scoped to runtime transpo
 
 The following architecture pieces are not implemented in `dev/refactor-node` yet:
 
-- a local TypeScript trace hub in this repository
 - blackboard materialization behind that hub
 - detector and scorer execution behind that hub
 - stable behavior episode publication
 - replay artifacts and replay-driven debugging workflow
-- shared core plus per-version adapter module split
+- broader shared-core extraction beyond the current thin capture/trace contracts
 - simultaneous multi-version release flow
 
 ## Practical Reading Rule
@@ -114,6 +115,7 @@ When a doc says `should` or `target`, treat it as design direction rather than a
 When you need to understand the code in `dev/refactor-node`, assume:
 
 - `dev/refactor-node` is single-version
-- `dev/refactor-node` is Java-first
+- `dev/refactor-node` is Java-first for the mod, with a pnpm workspace also present in-repo
 - `dev/refactor-node` is still using a direct websocket client in the mod
+- `dev/refactor-node` keeps the websocket transport in the Java version module for now
 - `dev/refactor-node` is a capture and transport prototype, not the final repository shape

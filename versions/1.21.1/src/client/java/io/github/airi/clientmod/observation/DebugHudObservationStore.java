@@ -6,6 +6,9 @@ import java.util.Deque;
 import java.util.List;
 import java.util.Locale;
 
+import io.github.airi.clientmod.core.trace.ObservationEmitter;
+import io.github.airi.clientmod.core.trace.ObservationSample;
+
 public final class DebugHudObservationStore implements ObservationEmitter {
 	private static final int HISTORY_LIMIT = 32;
 

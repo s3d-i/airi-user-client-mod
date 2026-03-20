@@ -11,8 +11,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import io.github.airi.clientmod.AiriUserClientMod;
-import io.github.airi.clientmod.observation.ObservationEmitter;
-import io.github.airi.clientmod.observation.ObservationSample;
+import io.github.airi.clientmod.core.trace.ObservationEmitter;
+import io.github.airi.clientmod.core.trace.ObservationSample;
 
 public final class WebSocketObservationSink implements ObservationEmitter {
 	private static final String WS_URI_PROPERTY = "airi.transport.ws.uri";
