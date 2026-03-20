@@ -55,11 +55,13 @@ To forward websocket transport and console-exported transport metrics into the c
 
 ```sh
 ./gradlew runClient \
-  -Dairi.transport.ws.uri=ws://127.0.0.1:8787/ws \
+  -Dairi.hub.ingress.ws.uri=ws://127.0.0.1:8787/ws \
   -Dairi.otel.enabled=true \
   -Dairi.otel.metrics.exporter=console \
   -Dairi.otel.metrics.export.interval.millis=5000
 ```
+
+`airi.transport.ws.uri` still works as a legacy override. If both properties are present, `airi.hub.ingress.ws.uri` wins.
 
 Once the client is in a world, press `F3`. The left debug panel should show an `[AIRI] observation emit` block with the latest sampled values and transport state.
 
@@ -94,23 +96,24 @@ The Fabric client currently owns websocket publishing directly.
 
 That transport code still lives in the version module under `versions/1.21.1/`. It has not been promoted into `core/`.
 
-That Java transport layer currently handles:
+That Java transport layer is now a thin local-hub ingress adapter. It owns:
 
 - endpoint resolution
-- connection lifecycle
-- reconnect backoff
-- bounded queueing
 - payload serialization
-- send latency and failure tracking
+- one websocket target
+- best-effort connection and send attempts
+- minimal ingress status tracking
 
-This is the main implementation gap relative to the transport boundary described in [`../design/transport-hub.md`](../design/transport-hub.md).
+Each `ObservationSample` becomes one raw websocket message with `kind = "observation.sample"` and the sampled payload fields.
+
+The Java transport no longer owns queueing, reconnect backoff, multi-consumer fanout, or AIRI host-protocol semantics.
 
 ### 4. Transport Observability
 
 `dev/refactor-node` also includes transport-focused runtime visibility:
 
-- local transport status state for debug display
-- OTel transport metrics for queue depth, reconnects, drops, send latency, and failures
+- local ingress status state for debug display
+- OTel transport metrics for connect attempts, state changes, opens/closes, and send success/failure
 
 That observability is real and useful, but it is still scoped to runtime transport health rather than gameplay semantics.
 

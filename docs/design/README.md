@@ -6,8 +6,9 @@ This directory contains the target architecture and stable design constraints.
 
 1. [Architecture](./architecture.md)
 2. [Transport Hub](./transport-hub.md)
-3. [Capture Event Taxonomy](./capture-event-taxonomy.md)
-4. [Guardrails](./guardrails.md)
+3. [Hub Ingress WS](./hub-ingress-ws.md)
+4. [Capture Event Taxonomy](./capture-event-taxonomy.md)
+5. [Guardrails](./guardrails.md)
 
 ## What Each Doc Is For
 
@@ -16,6 +17,9 @@ This directory contains the target architecture and stable design constraints.
 
 - [Transport Hub](./transport-hub.md)
   Defines the intended boundary between the Minecraft mod and the local TypeScript hub.
+
+- [Hub Ingress WS](./hub-ingress-ws.md)
+  Pins the initial Java-to-local-hub websocket ingress contract and the responsibilities on each side.
 
 - [Capture Event Taxonomy](./capture-event-taxonomy.md)
   Defines the raw gameplay-facing event families the capture layer should grow toward.

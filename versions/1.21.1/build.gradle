@@ -33,6 +33,7 @@ dependencies {
 }
 
 def clientRuntimeSystemProperties = [
+	"airi.hub.ingress.ws.uri",
 	"airi.transport.ws.uri",
 	"airi.otel.enabled",
 	"airi.otel.metrics.exporter",

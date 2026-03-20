@@ -4,5 +4,5 @@ public enum TransportConnectionState {
 	DISCONNECTED,
 	CONNECTING,
 	OPEN,
-	BACKOFF
+	ERROR
 }

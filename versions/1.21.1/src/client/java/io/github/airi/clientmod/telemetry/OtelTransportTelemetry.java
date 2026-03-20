@@ -24,42 +24,41 @@ public final class OtelTransportTelemetry implements TransportTelemetry {
 	private static final AttributeKey<String> FAILURE_TYPE_ATTRIBUTE = AttributeKey.stringKey("failure.type");
 	private static final AttributeKey<Long> CLOSE_STATUS_CODE_ATTRIBUTE = AttributeKey.longKey("close.status_code");
 
-	private final AtomicLong queueDepth = new AtomicLong();
 	private final AtomicReference<TransportConnectionState> connectionState =
 		new AtomicReference<>(TransportConnectionState.DISCONNECTED);
 	private final AtomicReference<TransportConnectionState> previousConnectionState =
 		new AtomicReference<>(TransportConnectionState.DISCONNECTED);
 	private final AtomicLong stateChangedAtMillis = new AtomicLong(System.currentTimeMillis());
-	private final LongCounter sentCounter;
-	private final LongCounter droppedCounter;
+	private final LongCounter sendSuccessCounter;
+	private final LongCounter sendFailureCounter;
 	private final LongCounter connectAttemptCounter;
+	private final LongCounter connectFailureCounter;
 	private final LongCounter stateTransitionCounter;
 	private final LongCounter connectionOpenCounter;
 	private final LongCounter connectionCloseCounter;
-	private final LongCounter reconnectCounter;
-	private final LongCounter connectionFailureCounter;
 	private final LongHistogram sendLatencyMillis;
 	private final LongHistogram connectionAttemptDurationMillis;
-	private final LongHistogram reconnectBackoffMillis;
-	@SuppressWarnings("unused")
-	private final ObservableLongGauge queueDepthGauge;
 	@SuppressWarnings("unused")
 	private final ObservableLongGauge connectionStateGauge;
 	@SuppressWarnings("unused")
 	private final ObservableLongGauge connectionStateDurationGauge;
 
 	public OtelTransportTelemetry(Meter meter) {
-		this.sentCounter = meter.counterBuilder(METRIC_PREFIX + "messages.sent")
-			.setDescription("Number of websocket observation messages sent")
+		this.sendSuccessCounter = meter.counterBuilder(METRIC_PREFIX + "send.success")
+			.setDescription("Number of observation samples sent to the local hub ingress")
 			.setUnit("{message}")
 			.build();
-		this.droppedCounter = meter.counterBuilder(METRIC_PREFIX + "messages.dropped")
-			.setDescription("Number of websocket observation messages dropped before send")
-			.setUnit("{message}")
+		this.sendFailureCounter = meter.counterBuilder(METRIC_PREFIX + "send.failure")
+			.setDescription("Number of observation sample sends that failed")
+			.setUnit("{failure}")
 			.build();
 		this.connectAttemptCounter = meter.counterBuilder(METRIC_PREFIX + "connection.attempts")
 			.setDescription("Number of websocket connection attempts started")
 			.setUnit("{attempt}")
+			.build();
+		this.connectFailureCounter = meter.counterBuilder(METRIC_PREFIX + "connection.failures")
+			.setDescription("Number of websocket connection attempts that failed")
+			.setUnit("{failure}")
 			.build();
 		this.stateTransitionCounter = meter.counterBuilder(METRIC_PREFIX + "connection.transitions")
 			.setDescription("Number of websocket connection state transitions")
@@ -73,14 +72,6 @@ public final class OtelTransportTelemetry implements TransportTelemetry {
 			.setDescription("Number of websocket connections closed")
 			.setUnit("{connection}")
 			.build();
-		this.reconnectCounter = meter.counterBuilder(METRIC_PREFIX + "reconnects")
-			.setDescription("Number of websocket reconnects scheduled")
-			.setUnit("{reconnect}")
-			.build();
-		this.connectionFailureCounter = meter.counterBuilder(METRIC_PREFIX + "connection.failures")
-			.setDescription("Number of websocket connection or send failures")
-			.setUnit("{failure}")
-			.build();
 		this.sendLatencyMillis = meter.histogramBuilder(METRIC_PREFIX + "send.latency")
 			.ofLongs()
 			.setDescription("Websocket observation send latency")
@@ -91,16 +82,6 @@ public final class OtelTransportTelemetry implements TransportTelemetry {
 			.setDescription("Websocket connection attempt duration")
 			.setUnit("ms")
 			.build();
-		this.reconnectBackoffMillis = meter.histogramBuilder(METRIC_PREFIX + "reconnect.backoff")
-			.ofLongs()
-			.setDescription("Websocket reconnect backoff duration")
-			.setUnit("ms")
-			.build();
-		this.queueDepthGauge = meter.gaugeBuilder(METRIC_PREFIX + "queue.depth")
-			.ofLongs()
-			.setDescription("Current websocket transport queue depth")
-			.setUnit("{message}")
-			.buildWithCallback(measurement -> measurement.record(queueDepth.get()));
 		this.connectionStateGauge = meter.gaugeBuilder(METRIC_PREFIX + "connection.state")
 			.ofLongs()
 			.setDescription("Current websocket transport connection state")
@@ -159,20 +140,8 @@ public final class OtelTransportTelemetry implements TransportTelemetry {
 	}
 
 	@Override
-	public void onQueueDepthChanged(int queueDepth) {
-		this.queueDepth.set(queueDepth);
-	}
-
-	@Override
-	public void onMessageDropped(long droppedCount, int queueDepth) {
-		this.queueDepth.set(queueDepth);
-		droppedCounter.add(1L);
-	}
-
-	@Override
-	public void onMessageSent(long sentCount, long latencyMillis, int queueDepth) {
-		this.queueDepth.set(queueDepth);
-		sentCounter.add(1L);
+	public void onSendSucceeded(long latencyMillis) {
+		sendSuccessCounter.add(1L);
 		sendLatencyMillis.record(latencyMillis);
 	}
 
@@ -193,23 +162,22 @@ public final class OtelTransportTelemetry implements TransportTelemetry {
 	}
 
 	@Override
-	public void onReconnectScheduled(long backoffMillis) {
-		reconnectCounter.add(1L);
-		reconnectBackoffMillis.record(backoffMillis);
-	}
-
-	@Override
 	public void onConnectionFailure(String phase, Throwable error, long connectDurationMillis) {
-		connectionFailureCounter.add(1L, Attributes.of(
+		Attributes attributes = Attributes.of(
 			FAILURE_PHASE_ATTRIBUTE,
 			phase,
 			FAILURE_TYPE_ATTRIBUTE,
 			classifyFailure(error)
-		));
+		);
+		if ("connect".equals(phase)) {
+			connectFailureCounter.add(1L, attributes);
+		} else if ("send".equals(phase)) {
+			sendFailureCounter.add(1L, attributes);
+		}
 		if (connectDurationMillis >= 0L) {
 			connectionAttemptDurationMillis.record(
 				connectDurationMillis,
-				Attributes.of(CONNECTION_RESULT_ATTRIBUTE, "failure")
+				Attributes.of(CONNECTION_RESULT_ATTRIBUTE, "failure", FAILURE_PHASE_ATTRIBUTE, phase)
 			);
 		}
 	}
@@ -219,7 +187,7 @@ public final class OtelTransportTelemetry implements TransportTelemetry {
 			case DISCONNECTED -> 0L;
 			case CONNECTING -> 1L;
 			case OPEN -> 2L;
-			case BACKOFF -> 3L;
+			case ERROR -> 3L;
 		};
 	}
 

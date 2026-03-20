@@ -12,8 +12,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 
 public final class AiriUserClientModClient implements ClientModInitializer {
 	private static final DebugHudObservationStore DEBUG_STORE = new DebugHudObservationStore();
-	private static final TransportStatusStore TRANSPORT_STATUS_STORE =
-		new TransportStatusStore(WebSocketObservationSink.MAX_QUEUE_DEPTH);
+	private static final TransportStatusStore TRANSPORT_STATUS_STORE = new TransportStatusStore();
 
 	private WebSocketObservationSink websocketSink;
 	private ObservationSampler observationSampler;

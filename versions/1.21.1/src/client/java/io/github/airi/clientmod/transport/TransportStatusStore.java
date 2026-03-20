@@ -4,103 +4,74 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class TransportStatusStore {
-	private static final int DEFAULT_QUEUE_CAPACITY = 128;
-
-	private final int queueCapacity;
 	private TransportConnectionState state = TransportConnectionState.DISCONNECTED;
 	private TransportConnectionState previousState = TransportConnectionState.DISCONNECTED;
 	private long stateChangedAtMillis = System.currentTimeMillis();
 	private boolean hasStateTransition;
 	private String endpoint = "ws://127.0.0.1:8787/ws";
-	private int queueDepth;
-	private long droppedCount;
-	private long reconnectCount;
-	private long failureCount;
-	private long sentCount;
+	private SendOutcome lastSendOutcome = SendOutcome.NONE;
+	private long lastSendOutcomeAtMillis;
 	private long lastSendLatencyMillis = -1L;
 	private long lastSentAtMillis;
-	private long retryDelayMillis;
 	private String lastError = "none";
-
-	public TransportStatusStore() {
-		this(DEFAULT_QUEUE_CAPACITY);
-	}
-
-	public TransportStatusStore(int queueCapacity) {
-		this.queueCapacity = Math.max(1, queueCapacity);
-	}
 
 	public synchronized void setEndpoint(String endpoint) {
 		this.endpoint = endpoint;
 	}
 
 	public synchronized TransportStateTransition markConnecting() {
-		retryDelayMillis = 0L;
 		return transitionTo(TransportConnectionState.CONNECTING);
 	}
 
 	public synchronized TransportStateTransition markOpen() {
-		retryDelayMillis = 0L;
 		lastError = "none";
 		return transitionTo(TransportConnectionState.OPEN);
 	}
 
-	public synchronized TransportStateTransition markBackoff(long delayMillis, String errorMessage) {
-		reconnectCount++;
-		retryDelayMillis = delayMillis;
-		updateLastError(errorMessage);
-		return transitionTo(TransportConnectionState.BACKOFF);
-	}
-
-	public synchronized TransportStateTransition markDisconnected(String errorMessage) {
-		retryDelayMillis = 0L;
-		updateLastError(errorMessage);
+	public synchronized TransportStateTransition markDisconnected(String reason) {
+		updateLastError(reason);
 		return transitionTo(TransportConnectionState.DISCONNECTED);
 	}
 
-	public synchronized void updateQueueDepth(int queueDepth) {
-		this.queueDepth = queueDepth;
-	}
-
-	public synchronized long recordDropped(int queueDepth, String errorMessage) {
-		droppedCount++;
-		this.queueDepth = queueDepth;
+	public synchronized TransportStateTransition markError(String errorMessage) {
 		updateLastError(errorMessage);
-		return droppedCount;
+		return transitionTo(TransportConnectionState.ERROR);
 	}
 
-	public synchronized long recordSent(long latencyMillis, int queueDepth) {
-		sentCount++;
+	public synchronized void recordSendSuccess(long latencyMillis) {
+		long now = System.currentTimeMillis();
+		lastSendOutcome = SendOutcome.SUCCESS;
+		lastSendOutcomeAtMillis = now;
 		lastSendLatencyMillis = latencyMillis;
-		lastSentAtMillis = System.currentTimeMillis();
-		this.queueDepth = queueDepth;
-		return sentCount;
+		lastSentAtMillis = now;
+		lastError = "none";
 	}
 
-	public synchronized long recordFailure(String errorMessage) {
-		failureCount++;
+	public synchronized void recordSendSkipped(String reason) {
+		lastSendOutcome = SendOutcome.SKIPPED;
+		lastSendOutcomeAtMillis = System.currentTimeMillis();
+		updateLastError(reason);
+	}
+
+	public synchronized void recordSendFailure(String errorMessage) {
+		lastSendOutcome = SendOutcome.FAILURE;
+		lastSendOutcomeAtMillis = System.currentTimeMillis();
 		updateLastError(errorMessage);
-		return failureCount;
 	}
 
 	public synchronized List<String> buildPanelLines() {
 		long now = System.currentTimeMillis();
 		long stateAgeMillis = Math.max(0L, now - stateChangedAtMillis);
 		List<String> lines = new ArrayList<>();
-		lines.add("[AIRI] transport");
+		lines.add("[AIRI] hub ingress");
 		lines.add("WS: " + state.name() + " (" + formatDuration(stateAgeMillis) + ")");
 
 		if (hasStateTransition) {
 			lines.add("Transition: " + previousState.name() + " -> " + state.name());
 		}
 
-		String queueLine = "Queue: " + queueDepth + "/" + queueCapacity;
-		if (queueDepth >= queueCapacity) {
-			queueLine += " FULL";
-		}
-		lines.add(queueLine);
-		lines.add("Dropped: " + droppedCount + " | Reconnects: " + reconnectCount);
-		lines.add("Failures: " + failureCount + " | Sent: " + sentCount);
+		lines.add("Endpoint: " + endpoint);
+		lines.add("Last outcome: " + describeLastOutcome(now));
 
 		if (lastSentAtMillis == 0L) {
 			lines.add("Last send success: never");
@@ -111,11 +82,6 @@ public final class TransportStatusStore {
 			);
 		}
 
-		if (state == TransportConnectionState.BACKOFF) {
-			lines.add("Retry in: " + formatDuration(retryDelayMillis));
-		}
-
-		lines.add("Endpoint: " + endpoint);
 		lines.add("Last error: " + lastError);
 		return lines;
 	}
@@ -132,6 +98,15 @@ public final class TransportStatusStore {
 		stateChangedAtMillis = now;
 		hasStateTransition = true;
 		return new TransportStateTransition(priorState, state, now, true);
+	}
+
+	private String describeLastOutcome(long now) {
+		if (lastSendOutcome == SendOutcome.NONE || lastSendOutcomeAtMillis == 0L) {
+			return "none yet";
+		}
+
+		long ageMillis = Math.max(0L, now - lastSendOutcomeAtMillis);
+		return lastSendOutcome.label + " (" + formatDuration(ageMillis) + " ago)";
 	}
 
 	private static String formatDuration(long millis) {
@@ -166,5 +141,18 @@ public final class TransportStatusStore {
 		}
 
 		lastError = errorMessage;
+	}
+
+	private enum SendOutcome {
+		NONE("none"),
+		SUCCESS("success"),
+		SKIPPED("skipped"),
+		FAILURE("failure");
+
+		private final String label;
+
+		SendOutcome(String label) {
+			this.label = label;
+		}
 	}
 }

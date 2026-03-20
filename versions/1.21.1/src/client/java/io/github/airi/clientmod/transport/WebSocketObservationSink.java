@@ -3,28 +3,19 @@ package io.github.airi.clientmod.transport;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
-import java.util.ArrayDeque;
-import java.util.Deque;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 import io.github.airi.clientmod.AiriUserClientMod;
 import io.github.airi.clientmod.core.trace.ObservationEmitter;
 import io.github.airi.clientmod.core.trace.ObservationSample;
 
 public final class WebSocketObservationSink implements ObservationEmitter {
-	private static final String WS_URI_PROPERTY = "airi.transport.ws.uri";
+	private static final String HUB_INGRESS_WS_URI_PROPERTY = "airi.hub.ingress.ws.uri";
+	private static final String LEGACY_WS_URI_PROPERTY = "airi.transport.ws.uri";
 	private static final String DEFAULT_WS_URI = "ws://127.0.0.1:8787/ws";
-	public static final int MAX_QUEUE_DEPTH = 128;
-	private static final long INITIAL_RECONNECT_BACKOFF_MILLIS = 1000L;
-	private static final long MAX_RECONNECT_BACKOFF_MILLIS = 30000L;
+	private static final long CONNECT_ATTEMPT_GUARD_MILLIS = 1000L;
 
 	private final HttpClient httpClient = HttpClient.newHttpClient();
-	private final ScheduledExecutorService reconnectExecutor =
-		Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().name("airi-ws-transport").factory());
-	private final Deque<String> pendingMessages = new ArrayDeque<>();
 	private final TransportStatusStore statusStore;
 	private final TransportTelemetry telemetry;
 	private final URI endpointUri;
@@ -32,10 +23,9 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 
 	private WebSocket webSocket;
 	private boolean connectInFlight;
-	private boolean reconnectScheduled;
 	private boolean sendInFlight;
 	private long connectAttemptStartedAtMillis;
-	private long nextReconnectBackoffMillis = INITIAL_RECONNECT_BACKOFF_MILLIS;
+	private long lastConnectAttemptAtMillis;
 
 	public WebSocketObservationSink(TransportStatusStore statusStore) {
 		this(statusStore, TransportTelemetry.NOOP);
@@ -54,23 +44,62 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 
 	@Override
 	public void emit(ObservationSample sample) {
+		WebSocket socketToUse;
+		String skipReason;
+		long sendStartedAtMillis = System.currentTimeMillis();
+		String message = serializeObservationSample(sample);
+
 		synchronized (this) {
-			enqueueMessageLocked(serializeObservationSample(sample));
+			if (webSocket != null && !sendInFlight) {
+				socketToUse = webSocket;
+				skipReason = null;
+				sendInFlight = true;
+			} else if (sendInFlight) {
+				socketToUse = null;
+				skipReason = "hub ingress websocket busy; sample skipped";
+			} else {
+				socketToUse = null;
+				skipReason = "hub ingress websocket not open; sample skipped";
+			}
 		}
 
-		connectIfNeeded();
-		drainQueue();
+		if (socketToUse == null) {
+			statusStore.recordSendSkipped(skipReason);
+			connectIfNeeded();
+			return;
+		}
+
+		socketToUse.sendText(message, true).whenComplete((ignored, error) -> {
+			if (error != null) {
+				handleSendFailure(socketToUse, error);
+				return;
+			}
+
+			long latencyMillis = Math.max(0L, System.currentTimeMillis() - sendStartedAtMillis);
+			synchronized (this) {
+				sendInFlight = false;
+			}
+			statusStore.recordSendSuccess(latencyMillis);
+			telemetry.onSendSucceeded(latencyMillis);
+		});
 	}
 
 	private void connectIfNeeded() {
+		long now = System.currentTimeMillis();
 		boolean shouldConnect = false;
 
 		synchronized (this) {
-			if (webSocket == null && !connectInFlight && !reconnectScheduled) {
-				connectInFlight = true;
-				connectAttemptStartedAtMillis = System.currentTimeMillis();
-				shouldConnect = true;
+			if (webSocket != null || connectInFlight) {
+				return;
 			}
+			if (lastConnectAttemptAtMillis != 0L && now - lastConnectAttemptAtMillis < CONNECT_ATTEMPT_GUARD_MILLIS) {
+				return;
+			}
+
+			connectInFlight = true;
+			connectAttemptStartedAtMillis = now;
+			lastConnectAttemptAtMillis = now;
+			shouldConnect = true;
 		}
 
 		if (!shouldConnect) {
@@ -85,204 +114,180 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			.buildAsync(endpointUri, new Listener())
 			.whenComplete((socket, error) -> {
 				if (error != null) {
-					handleConnectionFailure(error, true);
+					handleConnectFailure(error);
 				}
 			});
 	}
 
-	private void drainQueue() {
-		WebSocket socket;
-		String nextMessage;
-		long sendStartedAtMillis = System.currentTimeMillis();
+	private void handleConnectFailure(Throwable error) {
+		long connectDurationMillis;
 
 		synchronized (this) {
-			if (webSocket == null || sendInFlight || pendingMessages.isEmpty()) {
-				return;
-			}
-
-			socket = webSocket;
-			nextMessage = pendingMessages.peekFirst();
-			sendInFlight = true;
-		}
-
-		socket.sendText(nextMessage, true).whenComplete((ignored, error) -> {
-			if (error != null) {
-				handleConnectionFailure(error, false);
-				return;
-			}
-
-			long latencyMillis = Math.max(0L, System.currentTimeMillis() - sendStartedAtMillis);
-			int queueDepth;
-			long sentCount;
-
-			synchronized (this) {
-				pendingMessages.removeFirst();
-				sendInFlight = false;
-				queueDepth = pendingMessages.size();
-			}
-
-			sentCount = statusStore.recordSent(latencyMillis, queueDepth);
-			telemetry.onMessageSent(sentCount, latencyMillis, queueDepth);
-			telemetry.onQueueDepthChanged(queueDepth);
-			drainQueue();
-		});
-	}
-
-	private void enqueueMessageLocked(String message) {
-		if (pendingMessages.size() >= MAX_QUEUE_DEPTH) {
-			pendingMessages.removeFirst();
-			long droppedCount = statusStore.recordDropped(
-				pendingMessages.size(),
-				"transport queue full; dropped oldest message"
-			);
-			telemetry.onMessageDropped(droppedCount, pendingMessages.size());
-		}
-
-		pendingMessages.addLast(message);
-		statusStore.updateQueueDepth(pendingMessages.size());
-		telemetry.onQueueDepthChanged(pendingMessages.size());
-	}
-
-	private void handleConnectionFailure(Throwable error, boolean fromConnectPhase) {
-		String message = summarize(error);
-		boolean shouldScheduleReconnect = false;
-		long connectDurationMillis = -1L;
-
-		synchronized (this) {
-			if (fromConnectPhase && connectAttemptStartedAtMillis != 0L) {
-				connectDurationMillis = Math.max(0L, System.currentTimeMillis() - connectAttemptStartedAtMillis);
-			}
-			connectAttemptStartedAtMillis = 0L;
+			connectDurationMillis = finishConnectAttemptLocked();
 			connectInFlight = false;
+		}
+
+		String message = summarize(error);
+		TransportStateTransition transition = statusStore.markError("connect failed: " + message);
+		telemetry.onStateChanged(transition);
+		telemetry.onConnectionFailure("connect", error, connectDurationMillis);
+		AiriUserClientMod.LOGGER.warn("Hub ingress websocket connect failed: {}", message);
+	}
+
+	private void handleSendFailure(WebSocket failingSocket, Throwable error) {
+		boolean shouldHandle;
+		boolean shouldAbort = false;
+
+		synchronized (this) {
+			shouldHandle = sendInFlight || webSocket == failingSocket;
 			sendInFlight = false;
-
-			if (webSocket != null) {
-				try {
-					webSocket.abort();
-				} catch (RuntimeException ignored) {
-				}
+			if (webSocket == failingSocket) {
 				webSocket = null;
-			}
-
-			if (!reconnectScheduled) {
-				reconnectScheduled = true;
-				shouldScheduleReconnect = true;
+				shouldAbort = true;
 			}
 		}
 
-		statusStore.recordFailure(message);
-		telemetry.onConnectionFailure(fromConnectPhase ? "connect" : "send", error, connectDurationMillis);
-
-		if (!shouldScheduleReconnect) {
+		if (!shouldHandle) {
 			return;
 		}
 
-		long backoffMillis = reserveReconnectBackoff();
-		TransportStateTransition transition = statusStore.markBackoff(backoffMillis, message);
-		telemetry.onStateChanged(transition);
-		telemetry.onReconnectScheduled(backoffMillis);
-
-		if (fromConnectPhase) {
-			AiriUserClientMod.LOGGER.warn("Observation websocket connect failed: {}", message);
-		} else {
-			AiriUserClientMod.LOGGER.warn("Observation websocket send failed: {}", message);
-		}
-
-		reconnectExecutor.schedule(() -> {
-			synchronized (this) {
-				reconnectScheduled = false;
+		if (shouldAbort) {
+			try {
+				failingSocket.abort();
+			} catch (RuntimeException ignored) {
 			}
-			connectIfNeeded();
-		}, backoffMillis, TimeUnit.MILLISECONDS);
-	}
-
-	private long reserveReconnectBackoff() {
-		long backoffMillis;
-
-		synchronized (this) {
-			backoffMillis = nextReconnectBackoffMillis;
-			nextReconnectBackoffMillis = Math.min(nextReconnectBackoffMillis * 2L, MAX_RECONNECT_BACKOFF_MILLIS);
 		}
 
-		return backoffMillis;
+		String message = summarize(error);
+		statusStore.recordSendFailure("send failed: " + message);
+		TransportStateTransition transition = statusStore.markError("send failed: " + message);
+		telemetry.onStateChanged(transition);
+		telemetry.onConnectionFailure("send", error, -1L);
+		AiriUserClientMod.LOGGER.warn("Hub ingress websocket send failed: {}", message);
 	}
 
 	private void handleOpen(WebSocket socket) {
-		long connectDurationMillis = -1L;
+		long connectDurationMillis;
 
 		synchronized (this) {
-			if (connectAttemptStartedAtMillis != 0L) {
-				connectDurationMillis = Math.max(0L, System.currentTimeMillis() - connectAttemptStartedAtMillis);
-			}
-			connectAttemptStartedAtMillis = 0L;
+			connectDurationMillis = finishConnectAttemptLocked();
 			webSocket = socket;
 			connectInFlight = false;
 			sendInFlight = false;
-			nextReconnectBackoffMillis = INITIAL_RECONNECT_BACKOFF_MILLIS;
 		}
 
 		TransportStateTransition transition = statusStore.markOpen();
 		telemetry.onStateChanged(transition);
 		telemetry.onConnectionOpened(connectDurationMillis);
-		AiriUserClientMod.LOGGER.info("Observation websocket connected to {}", endpointUri);
-		drainQueue();
+		AiriUserClientMod.LOGGER.info("Hub ingress websocket connected to {}", endpointUri);
 	}
 
-	private void handleClosed(int statusCode, String reason) {
-		String closeReason = "closed (" + statusCode + "): " + reason;
-		boolean shouldReconnect = false;
+	private void handleClosed(WebSocket socket, int statusCode, String reason) {
+		TransportStateTransition transition;
+		String closeReason = summarizeClose(statusCode, reason);
+		boolean wasSending;
 
 		synchronized (this) {
+			if (webSocket != socket) {
+				return;
+			}
+
+			wasSending = sendInFlight;
 			webSocket = null;
 			connectInFlight = false;
 			sendInFlight = false;
-			if (!reconnectScheduled) {
-				reconnectScheduled = true;
-				shouldReconnect = true;
-			}
+			transition = statusCode == WebSocket.NORMAL_CLOSURE
+				? statusStore.markDisconnected(closeReason)
+				: statusStore.markError(closeReason);
 		}
 
+		if (wasSending) {
+			statusStore.recordSendFailure("send failed: " + closeReason);
+			telemetry.onConnectionFailure("send", null, -1L);
+		}
+		telemetry.onStateChanged(transition);
 		telemetry.onConnectionClosed(statusCode);
-
-		if (!shouldReconnect) {
+		if (statusCode == WebSocket.NORMAL_CLOSURE) {
+			AiriUserClientMod.LOGGER.info("Hub ingress websocket closed: {}", closeReason);
 			return;
 		}
 
-		long backoffMillis = reserveReconnectBackoff();
-		TransportStateTransition transition = statusStore.markBackoff(backoffMillis, closeReason);
-		telemetry.onStateChanged(transition);
-		telemetry.onReconnectScheduled(backoffMillis);
-		AiriUserClientMod.LOGGER.warn("Observation websocket disconnected: {}", closeReason);
+		AiriUserClientMod.LOGGER.warn("Hub ingress websocket closed: {}", closeReason);
+	}
 
-		reconnectExecutor.schedule(() -> {
-			synchronized (this) {
-				reconnectScheduled = false;
+	private void handleSocketError(WebSocket socket, Throwable error) {
+		TransportStateTransition transition;
+		boolean wasSending;
+
+		synchronized (this) {
+			if (webSocket != socket) {
+				return;
 			}
-			connectIfNeeded();
-		}, backoffMillis, TimeUnit.MILLISECONDS);
+
+			wasSending = sendInFlight;
+			webSocket = null;
+			connectInFlight = false;
+			sendInFlight = false;
+			transition = statusStore.markError("socket error: " + summarize(error));
+		}
+
+		if (wasSending) {
+			statusStore.recordSendFailure("send failed: " + summarize(error));
+			telemetry.onConnectionFailure("send", error, -1L);
+		}
+		telemetry.onStateChanged(transition);
+		AiriUserClientMod.LOGGER.warn("Hub ingress websocket error: {}", summarize(error));
 	}
 
 	private static URI resolveEndpointUri() {
-		String configuredUri = System.getProperty(WS_URI_PROPERTY, DEFAULT_WS_URI);
+		URI configuredEndpoint = resolveConfiguredEndpoint(HUB_INGRESS_WS_URI_PROPERTY);
+		if (configuredEndpoint != null) {
+			return configuredEndpoint;
+		}
+
+		configuredEndpoint = resolveConfiguredEndpoint(LEGACY_WS_URI_PROPERTY);
+		if (configuredEndpoint != null) {
+			return configuredEndpoint;
+		}
+
+		return URI.create(DEFAULT_WS_URI);
+	}
+
+	private static URI resolveConfiguredEndpoint(String propertyName) {
+		String configuredUri = System.getProperty(propertyName);
+		if (configuredUri == null || configuredUri.isBlank()) {
+			return null;
+		}
+
 		try {
-			return URI.create(configuredUri);
+			return URI.create(configuredUri.trim());
 		} catch (IllegalArgumentException exception) {
 			AiriUserClientMod.LOGGER.warn(
-				"Invalid observation websocket URI '{}' from -D{}; falling back to {}",
+				"Invalid hub ingress websocket URI '{}' from -D{}; ignoring",
 				configuredUri,
-				WS_URI_PROPERTY,
-				DEFAULT_WS_URI
+				propertyName
 			);
-			return URI.create(DEFAULT_WS_URI);
+			return null;
 		}
 	}
 
 	private static String summarize(Throwable error) {
+		if (error == null) {
+			return "unknown";
+		}
+
 		String message = error.getMessage();
 		if (message == null || message.isBlank()) {
 			return error.getClass().getSimpleName();
 		}
 		return error.getClass().getSimpleName() + ": " + message;
+	}
+
+	private static String summarizeClose(int statusCode, String reason) {
+		if (reason == null || reason.isBlank()) {
+			return "closed (" + statusCode + ")";
+		}
+		return "closed (" + statusCode + "): " + reason;
 	}
 
 	private String serializeObservationSample(ObservationSample sample) {
@@ -326,6 +331,16 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		return escaped.toString();
 	}
 
+	private long finishConnectAttemptLocked() {
+		if (connectAttemptStartedAtMillis == 0L) {
+			return -1L;
+		}
+
+		long durationMillis = Math.max(0L, System.currentTimeMillis() - connectAttemptStartedAtMillis);
+		connectAttemptStartedAtMillis = 0L;
+		return durationMillis;
+	}
+
 	private final class Listener implements WebSocket.Listener {
 		@Override
 		public void onOpen(WebSocket webSocket) {
@@ -341,13 +356,13 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 
 		@Override
 		public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
-			handleClosed(statusCode, reason);
+			handleClosed(webSocket, statusCode, reason);
 			return null;
 		}
 
 		@Override
 		public void onError(WebSocket webSocket, Throwable error) {
-			handleConnectionFailure(error, false);
+			handleSocketError(webSocket, error);
 		}
 	}
 }
