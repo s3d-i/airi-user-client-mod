@@ -1,0 +1,355 @@
+package io.github.airi.clientmod.transport;
+
+import java.util.List;
+
+import io.github.airi.clientmod.core.trace.InteractionBlockAttackAttemptTraceEvent;
+import io.github.airi.clientmod.core.trace.InteractionBlockBreakSuccessTraceEvent;
+import io.github.airi.clientmod.core.trace.InventoryTransactionTraceEvent;
+import io.github.airi.clientmod.core.trace.ObservationSample;
+import io.github.airi.clientmod.core.trace.PlayerHandStateChangedTraceEvent;
+import io.github.airi.clientmod.core.trace.PlayerLookTargetChangedTraceEvent;
+import io.github.airi.clientmod.core.trace.PlayerSelectedSlotChangedTraceEvent;
+import io.github.airi.clientmod.core.trace.TraceEvent;
+
+public final class DefaultTraceFrameEncoder implements TraceFrameEncoder {
+	private static final int TRACE_EVENT_WIRE_VERSION = 1;
+	private static final int SESSION_START_WIRE_VERSION = 2;
+	private static final int SESSION_END_WIRE_VERSION = 1;
+
+	@Override
+	public EncodedTraceFrame encodeTraceEvent(String sessionId, TraceEvent event) {
+		if (event instanceof ObservationSample sample) {
+			return new EncodedTraceFrame(
+				TraceEventKinds.OBSERVATION_SAMPLE,
+				serializeObservationSample(sessionId, sample)
+			);
+		}
+
+		if (event instanceof PlayerLookTargetChangedTraceEvent lookTargetChanged) {
+			return new EncodedTraceFrame(
+				TraceEventKinds.PLAYER_LOOK_TARGET_CHANGED,
+				serializePlayerLookTargetChangedTraceEvent(sessionId, lookTargetChanged)
+			);
+		}
+
+		if (event instanceof PlayerSelectedSlotChangedTraceEvent selectedSlotChanged) {
+			return new EncodedTraceFrame(
+				TraceEventKinds.PLAYER_SELECTED_SLOT_CHANGED,
+				serializePlayerSelectedSlotChangedTraceEvent(sessionId, selectedSlotChanged)
+			);
+		}
+
+		if (event instanceof PlayerHandStateChangedTraceEvent handStateChanged) {
+			return new EncodedTraceFrame(
+				TraceEventKinds.PLAYER_HAND_STATE_CHANGED,
+				serializePlayerHandStateChangedTraceEvent(sessionId, handStateChanged)
+			);
+		}
+
+		if (event instanceof InteractionBlockAttackAttemptTraceEvent blockAttackAttempt) {
+			return new EncodedTraceFrame(
+				TraceEventKinds.INTERACTION_BLOCK_ATTACK_ATTEMPT,
+				serializeInteractionBlockAttackAttemptTraceEvent(sessionId, blockAttackAttempt)
+			);
+		}
+
+		if (event instanceof InteractionBlockBreakSuccessTraceEvent blockBreakSuccess) {
+			return new EncodedTraceFrame(
+				TraceEventKinds.INTERACTION_BLOCK_BREAK_SUCCESS,
+				serializeInteractionBlockBreakSuccessTraceEvent(sessionId, blockBreakSuccess)
+			);
+		}
+
+		if (event instanceof InventoryTransactionTraceEvent inventoryTransaction) {
+			return new EncodedTraceFrame(
+				TraceEventKinds.INVENTORY_TRANSACTION,
+				serializeInventoryTransactionTraceEvent(sessionId, inventoryTransaction)
+			);
+		}
+
+		throw new IllegalArgumentException("Unsupported trace event: " + event.getClass().getName());
+	}
+
+	@Override
+	public EncodedTraceFrame encodeSessionStart(String sessionId, long sequence, long capturedAtMillis, SessionStartPayload payload) {
+		StringBuilder json = new StringBuilder(768);
+		json.append('{');
+		json.append("\"v\":").append(SESSION_START_WIRE_VERSION).append(',');
+		json.append("\"kind\":\"").append(TraceEventKinds.SESSION_START).append("\",");
+		json.append("\"sessionId\":\"").append(escapeJson(sessionId)).append("\",");
+		json.append("\"seq\":").append(sequence).append(',');
+		json.append("\"capturedAtMillis\":").append(capturedAtMillis).append(',');
+		json.append("\"payload\":{");
+		appendSessionStartPayload(json, payload);
+		json.append("}}");
+		return new EncodedTraceFrame(TraceEventKinds.SESSION_START, json.toString());
+	}
+
+	@Override
+	public EncodedTraceFrame encodeSessionEnd(String sessionId, long sequence, long capturedAtMillis) {
+		StringBuilder json = new StringBuilder(160);
+		json.append('{');
+		json.append("\"v\":").append(SESSION_END_WIRE_VERSION).append(',');
+		json.append("\"kind\":\"").append(TraceEventKinds.SESSION_END).append("\",");
+		json.append("\"sessionId\":\"").append(escapeJson(sessionId)).append("\",");
+		json.append("\"seq\":").append(sequence).append(',');
+		json.append("\"capturedAtMillis\":").append(capturedAtMillis);
+		json.append('}');
+		return new EncodedTraceFrame(TraceEventKinds.SESSION_END, json.toString());
+	}
+
+	private String serializeObservationSample(String sessionId, ObservationSample sample) {
+		StringBuilder json = new StringBuilder(320);
+		appendTraceEnvelopeStart(json, sessionId, TraceEventKinds.OBSERVATION_SAMPLE, sample);
+		appendCommonPayloadStart(json, sample);
+		json.append("\"fps\":").append(sample.fps()).append(',');
+		json.append("\"x\":").append(sample.x()).append(',');
+		json.append("\"y\":").append(sample.y()).append(',');
+		json.append("\"z\":").append(sample.z()).append(',');
+		json.append("\"vx\":").append(sample.vx()).append(',');
+		json.append("\"vy\":").append(sample.vy()).append(',');
+		json.append("\"vz\":").append(sample.vz()).append(',');
+		json.append("\"targetDescription\":\"").append(escapeJson(sample.targetDescription())).append('"');
+		json.append("}}");
+		return json.toString();
+	}
+
+	private String serializePlayerLookTargetChangedTraceEvent(String sessionId, PlayerLookTargetChangedTraceEvent event) {
+		StringBuilder json = new StringBuilder(320);
+		appendTraceEnvelopeStart(json, sessionId, TraceEventKinds.PLAYER_LOOK_TARGET_CHANGED, event);
+		appendCommonPayloadStart(json, event);
+		json.append("\"target\":");
+		appendLookTarget(json, event.target());
+		json.append("}}");
+		return json.toString();
+	}
+
+	private String serializePlayerSelectedSlotChangedTraceEvent(String sessionId, PlayerSelectedSlotChangedTraceEvent event) {
+		StringBuilder json = new StringBuilder(320);
+		appendTraceEnvelopeStart(json, sessionId, TraceEventKinds.PLAYER_SELECTED_SLOT_CHANGED, event);
+		appendCommonPayloadStart(json, event);
+		json.append("\"previousSelectedSlot\":").append(event.previousSelectedSlot()).append(',');
+		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
+		json.append("\"mainHand\":");
+		appendItemStackSnapshot(json, event.mainHand());
+		json.append(',');
+		json.append("\"offHand\":");
+		appendItemStackSnapshot(json, event.offHand());
+		json.append("}}");
+		return json.toString();
+	}
+
+	private String serializePlayerHandStateChangedTraceEvent(String sessionId, PlayerHandStateChangedTraceEvent event) {
+		StringBuilder json = new StringBuilder(320);
+		appendTraceEnvelopeStart(json, sessionId, TraceEventKinds.PLAYER_HAND_STATE_CHANGED, event);
+		appendCommonPayloadStart(json, event);
+		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
+		json.append("\"mainHand\":");
+		appendItemStackSnapshot(json, event.mainHand());
+		json.append(',');
+		json.append("\"offHand\":");
+		appendItemStackSnapshot(json, event.offHand());
+		json.append("}}");
+		return json.toString();
+	}
+
+	private String serializeInteractionBlockAttackAttemptTraceEvent(
+		String sessionId,
+		InteractionBlockAttackAttemptTraceEvent event
+	) {
+		StringBuilder json = new StringBuilder(320);
+		appendTraceEnvelopeStart(json, sessionId, TraceEventKinds.INTERACTION_BLOCK_ATTACK_ATTEMPT, event);
+		appendCommonPayloadStart(json, event);
+		json.append("\"block\":");
+		appendBlockReference(json, event.block());
+		json.append(',');
+		json.append("\"hand\":\"").append(escapeJson(event.hand())).append("\",");
+		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
+		json.append("\"heldItem\":");
+		appendItemStackSnapshot(json, event.heldItem());
+		json.append("}}");
+		return json.toString();
+	}
+
+	private String serializeInteractionBlockBreakSuccessTraceEvent(
+		String sessionId,
+		InteractionBlockBreakSuccessTraceEvent event
+	) {
+		StringBuilder json = new StringBuilder(320);
+		appendTraceEnvelopeStart(json, sessionId, TraceEventKinds.INTERACTION_BLOCK_BREAK_SUCCESS, event);
+		appendCommonPayloadStart(json, event);
+		json.append("\"block\":");
+		appendBlockReference(json, event.block());
+		json.append(',');
+		json.append("\"hand\":\"").append(escapeJson(event.hand())).append("\",");
+		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
+		json.append("\"heldItem\":");
+		appendItemStackSnapshot(json, event.heldItem());
+		json.append("}}");
+		return json.toString();
+	}
+
+	private String serializeInventoryTransactionTraceEvent(String sessionId, InventoryTransactionTraceEvent event) {
+		StringBuilder json = new StringBuilder(512);
+		appendTraceEnvelopeStart(json, sessionId, TraceEventKinds.INVENTORY_TRANSACTION, event);
+		appendCommonPayloadStart(json, event);
+		json.append("\"containerKind\":\"").append(escapeJson(event.containerKind())).append("\",");
+		json.append("\"source\":\"").append(escapeJson(event.source())).append("\",");
+		json.append("\"changedSlots\":[");
+		appendInventorySlotDeltas(json, event.changedSlots());
+		json.append("]}");
+		json.append('}');
+		return json.toString();
+	}
+
+	private void appendSessionStartPayload(StringBuilder json, SessionStartPayload payload) {
+		SessionStartPayload.Metadata metadata = payload.metadata();
+		SessionStartPayload.Producer producer = metadata.producer();
+		SessionStartPayload.Schema schema = metadata.schema();
+		SessionStartPayload.Capabilities capabilities = payload.capabilities();
+		SessionStartPayload.Sampling sampling = payload.sampling();
+
+		json.append("\"metadata\":{");
+		json.append("\"producer\":{");
+		json.append("\"modId\":\"").append(escapeJson(producer.modId())).append("\",");
+		json.append("\"modVersion\":\"").append(escapeJson(producer.modVersion())).append("\",");
+		json.append("\"minecraftVersion\":\"").append(escapeJson(producer.minecraftVersion())).append("\",");
+		json.append("\"loader\":\"").append(escapeJson(producer.loader())).append('"');
+		json.append("},");
+		json.append("\"schema\":{");
+		json.append("\"wireVersion\":").append(schema.wireVersion()).append(',');
+		json.append("\"canonicalVersion\":").append(schema.canonicalVersion());
+		json.append('}');
+		json.append("},");
+
+		json.append("\"capabilities\":{");
+		json.append("\"eventKinds\":[");
+		appendStringArray(json, capabilities.eventKinds());
+		json.append("]}");
+		json.append(',');
+
+		json.append("\"sampling\":{");
+		json.append("\"observationSampleIntervalTicks\":").append(sampling.observationSampleIntervalTicks()).append(',');
+		json.append("\"inventoryScanMode\":\"").append(escapeJson(sampling.inventoryScanMode())).append("\",");
+		json.append("\"inventoryMaxChangedSlots\":").append(sampling.inventoryMaxChangedSlots());
+		json.append('}');
+	}
+
+	private void appendTraceEnvelopeStart(StringBuilder json, String sessionId, String kind, TraceEvent event) {
+		json.append('{');
+		json.append("\"v\":").append(TRACE_EVENT_WIRE_VERSION).append(',');
+		json.append("\"kind\":\"").append(kind).append("\",");
+		json.append("\"sessionId\":\"").append(escapeJson(sessionId)).append("\",");
+		json.append("\"seq\":").append(event.sequence()).append(',');
+		json.append("\"capturedAtMillis\":").append(event.capturedAtMillis()).append(',');
+		json.append("\"payload\":{");
+	}
+
+	private void appendCommonPayloadStart(StringBuilder json, TraceEvent event) {
+		json.append("\"worldTick\":").append(event.worldTick()).append(',');
+		json.append("\"dimensionKey\":\"").append(escapeJson(event.dimensionKey())).append("\",");
+	}
+
+	private void appendLookTarget(StringBuilder json, TraceEvent.LookTarget target) {
+		json.append('{');
+		json.append("\"kind\":\"").append(escapeJson(target.kind())).append('"');
+		if (target.targetDescription() != null) {
+			json.append(",\"targetDescription\":\"").append(escapeJson(target.targetDescription())).append('"');
+		}
+		if (target.block() != null) {
+			json.append(",\"block\":");
+			appendBlockReference(json, target.block());
+		}
+		if (target.entity() != null) {
+			json.append(",\"entity\":");
+			appendLookTargetEntity(json, target.entity());
+		}
+		json.append('}');
+	}
+
+	private void appendLookTargetEntity(StringBuilder json, TraceEvent.LookTargetEntity entity) {
+		json.append('{');
+		json.append("\"entityTypeId\":\"").append(escapeJson(entity.entityTypeId())).append('"');
+		if (entity.entityId() != null) {
+			json.append(",\"entityId\":").append(entity.entityId());
+		}
+		json.append('}');
+	}
+
+	private void appendBlockReference(StringBuilder json, TraceEvent.BlockReference block) {
+		json.append('{');
+		json.append("\"blockId\":\"").append(escapeJson(block.blockId())).append("\",");
+		json.append("\"position\":");
+		appendBlockPosition(json, block.position());
+		if (block.hitFace() != null) {
+			json.append(",\"hitFace\":\"").append(escapeJson(block.hitFace())).append('"');
+		}
+		json.append('}');
+	}
+
+	private void appendBlockPosition(StringBuilder json, TraceEvent.BlockPosition position) {
+		json.append('{');
+		json.append("\"x\":").append(position.x()).append(',');
+		json.append("\"y\":").append(position.y()).append(',');
+		json.append("\"z\":").append(position.z());
+		json.append('}');
+	}
+
+	private void appendItemStackSnapshot(StringBuilder json, TraceEvent.ItemStackSnapshot item) {
+		json.append('{');
+		json.append("\"itemId\":");
+		if (item.itemId() == null) {
+			json.append("null");
+		} else {
+			json.append('"').append(escapeJson(item.itemId())).append('"');
+		}
+		json.append(",\"count\":").append(item.count());
+		json.append(",\"damage\":").append(item.damage());
+		json.append(",\"maxDamage\":").append(item.maxDamage());
+		json.append('}');
+	}
+
+	private void appendInventorySlotDeltas(StringBuilder json, List<TraceEvent.InventorySlotDelta> changedSlots) {
+		for (int index = 0; index < changedSlots.size(); index++) {
+			if (index > 0) {
+				json.append(',');
+			}
+			TraceEvent.InventorySlotDelta delta = changedSlots.get(index);
+			json.append('{');
+			json.append("\"slot\":").append(delta.slot()).append(',');
+			json.append("\"previous\":");
+			appendItemStackSnapshot(json, delta.previous());
+			json.append(',');
+			json.append("\"current\":");
+			appendItemStackSnapshot(json, delta.current());
+			json.append('}');
+		}
+	}
+
+	private void appendStringArray(StringBuilder json, List<String> values) {
+		for (int index = 0; index < values.size(); index++) {
+			if (index > 0) {
+				json.append(',');
+			}
+			json.append('"').append(escapeJson(values.get(index))).append('"');
+		}
+	}
+
+	private static String escapeJson(String value) {
+		StringBuilder escaped = new StringBuilder(value.length() + 8);
+
+		for (int index = 0; index < value.length(); index++) {
+			char character = value.charAt(index);
+			switch (character) {
+				case '\\' -> escaped.append("\\\\");
+				case '"' -> escaped.append("\\\"");
+				case '\n' -> escaped.append("\\n");
+				case '\r' -> escaped.append("\\r");
+				case '\t' -> escaped.append("\\t");
+				default -> escaped.append(character);
+			}
+		}
+
+		return escaped.toString();
+	}
+}

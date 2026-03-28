@@ -5,6 +5,7 @@ import io.github.airi.clientmod.observation.FanoutObservationEmitter;
 import io.github.airi.clientmod.observation.ObservationOrchestrator;
 import io.github.airi.clientmod.session.WorldSessionTracker;
 import io.github.airi.clientmod.telemetry.OtelBootstrap;
+import io.github.airi.clientmod.transport.DefaultSessionStartPayloadSupplier;
 import io.github.airi.clientmod.transport.TransportStatusStore;
 import io.github.airi.clientmod.transport.TransportTelemetry;
 import io.github.airi.clientmod.transport.WebSocketObservationSink;
@@ -35,14 +36,22 @@ public final class AiriUserClientModClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		TransportTelemetry transportTelemetry = OtelBootstrap.init();
 		worldSessionTracker = new WorldSessionTracker();
-		websocketSink = new WebSocketObservationSink(TRANSPORT_STATUS_STORE, transportTelemetry, () -> {
-			WorldSessionTracker.ActiveSessionState activeSession = worldSessionTracker.getActiveSession();
-			if (activeSession == null) {
-				return null;
-			}
+		websocketSink = new WebSocketObservationSink(
+			TRANSPORT_STATUS_STORE,
+			transportTelemetry,
+			() -> {
+				WorldSessionTracker.ActiveSessionState activeSession = worldSessionTracker.getActiveSession();
+				if (activeSession == null) {
+					return null;
+				}
 
-			return new WebSocketObservationSink.SessionReplay(activeSession.sessionId(), activeSession.startedAtMillis());
-		});
+				return new WebSocketObservationSink.ActiveSessionDescriptor(
+					activeSession.sessionId(),
+					activeSession.startedAtMillis()
+				);
+			},
+			new DefaultSessionStartPayloadSupplier()
+		);
 		observationOrchestrator = new ObservationOrchestrator(
 			new FanoutObservationEmitter(DEBUG_STORE, websocketSink),
 			worldSessionTracker

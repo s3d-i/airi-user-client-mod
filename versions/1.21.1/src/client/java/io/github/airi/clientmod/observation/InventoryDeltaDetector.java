@@ -7,7 +7,8 @@ import java.util.Objects;
 import io.github.airi.clientmod.core.trace.TraceEvent;
 
 public final class InventoryDeltaDetector {
-	private static final int MAX_INVENTORY_SLOT_DELTAS = 24;
+	public static final String INVENTORY_SCAN_MODE = "tick-diff";
+	public static final int MAX_INVENTORY_SLOT_DELTAS = 24;
 
 	private List<TraceEvent.ItemStackSnapshot> lastInventorySnapshot = List.of();
 
