@@ -1,6 +1,6 @@
 package io.github.airi.clientmod.core.trace;
 
-public record InteractionBlockBreakTraceEvent(
+public record InteractionBlockBreakSuccessTraceEvent(
 	long sequence,
 	long capturedAtMillis,
 	long worldTick,

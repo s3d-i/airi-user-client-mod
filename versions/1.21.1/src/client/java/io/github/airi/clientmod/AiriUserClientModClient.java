@@ -2,7 +2,7 @@ package io.github.airi.clientmod;
 
 import io.github.airi.clientmod.observation.DebugHudObservationStore;
 import io.github.airi.clientmod.observation.FanoutObservationEmitter;
-import io.github.airi.clientmod.observation.ObservationSampler;
+import io.github.airi.clientmod.observation.ObservationOrchestrator;
 import io.github.airi.clientmod.session.WorldSessionTracker;
 import io.github.airi.clientmod.telemetry.OtelBootstrap;
 import io.github.airi.clientmod.transport.TransportStatusStore;
@@ -20,7 +20,7 @@ public final class AiriUserClientModClient implements ClientModInitializer {
 	private static final TransportStatusStore TRANSPORT_STATUS_STORE = new TransportStatusStore();
 
 	private WebSocketObservationSink websocketSink;
-	private ObservationSampler observationSampler;
+	private ObservationOrchestrator observationOrchestrator;
 	private WorldSessionTracker worldSessionTracker;
 
 	public static DebugHudObservationStore getDebugStore() {
@@ -43,7 +43,7 @@ public final class AiriUserClientModClient implements ClientModInitializer {
 
 			return new WebSocketObservationSink.SessionReplay(activeSession.sessionId(), activeSession.startedAtMillis());
 		});
-		observationSampler = new ObservationSampler(
+		observationOrchestrator = new ObservationOrchestrator(
 			new FanoutObservationEmitter(DEBUG_STORE, websocketSink),
 			worldSessionTracker
 		);
@@ -60,12 +60,12 @@ public final class AiriUserClientModClient implements ClientModInitializer {
 			}
 			DEBUG_STORE.reset();
 		});
-		ClientTickEvents.END_CLIENT_TICK.register(observationSampler::onEndClientTick);
+		ClientTickEvents.END_CLIENT_TICK.register(observationOrchestrator::onEndClientTick);
 		AttackBlockCallback.EVENT.register((player, world, hand, pos, direction) -> {
-			observationSampler.onAttackBlock(player, world, hand, pos, direction);
+			observationOrchestrator.onAttackBlock(player, world, hand, pos, direction);
 			return ActionResult.PASS;
 		});
-		ClientPlayerBlockBreakEvents.AFTER.register(observationSampler::onAfterClientBlockBreak);
+		ClientPlayerBlockBreakEvents.AFTER.register(observationOrchestrator::onAfterClientBlockBreak);
 		AiriUserClientMod.LOGGER.info("Initialized AIRI experimental Fabric client instrumentation for Minecraft 1.21.1");
 	}
 }

@@ -444,7 +444,8 @@ function describeTraceDetail(event: RawTraceEvent): string {
       return `slot ${event.payload.previousSelectedSlot} -> ${event.payload.selectedSlot}`;
     case "player.hand_state.changed":
       return formatItemStack(event.payload.mainHand);
-    case "interaction.block.break":
+    case "interaction.block.attack.attempt":
+    case "interaction.block.break.success":
       return `${event.payload.block.blockId} @ ${formatBlockPosition(event.payload.block.position)}`;
     case "inventory.transaction":
       return `${event.payload.changedSlots.length} slot change(s)`;

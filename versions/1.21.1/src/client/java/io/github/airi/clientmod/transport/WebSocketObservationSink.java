@@ -9,7 +9,8 @@ import java.util.List;
 import java.util.concurrent.CompletionStage;
 
 import io.github.airi.clientmod.AiriUserClientMod;
-import io.github.airi.clientmod.core.trace.InteractionBlockBreakTraceEvent;
+import io.github.airi.clientmod.core.trace.InteractionBlockAttackAttemptTraceEvent;
+import io.github.airi.clientmod.core.trace.InteractionBlockBreakSuccessTraceEvent;
 import io.github.airi.clientmod.core.trace.InventoryTransactionTraceEvent;
 import io.github.airi.clientmod.core.trace.ObservationEmitter;
 import io.github.airi.clientmod.core.trace.ObservationSample;
@@ -488,8 +489,12 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			return serializePlayerHandStateChangedTraceEvent(sessionId, handStateChanged);
 		}
 
-		if (event instanceof InteractionBlockBreakTraceEvent blockBreak) {
-			return serializeInteractionBlockBreakTraceEvent(sessionId, blockBreak);
+		if (event instanceof InteractionBlockAttackAttemptTraceEvent blockAttackAttempt) {
+			return serializeInteractionBlockAttackAttemptTraceEvent(sessionId, blockAttackAttempt);
+		}
+
+		if (event instanceof InteractionBlockBreakSuccessTraceEvent blockBreakSuccess) {
+			return serializeInteractionBlockBreakSuccessTraceEvent(sessionId, blockBreakSuccess);
 		}
 
 		if (event instanceof InventoryTransactionTraceEvent inventoryTransaction) {
@@ -554,9 +559,30 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		return json.toString();
 	}
 
-	private String serializeInteractionBlockBreakTraceEvent(String sessionId, InteractionBlockBreakTraceEvent event) {
+	private String serializeInteractionBlockAttackAttemptTraceEvent(
+		String sessionId,
+		InteractionBlockAttackAttemptTraceEvent event
+	) {
 		StringBuilder json = new StringBuilder(320);
-		appendTraceEnvelopeStart(json, sessionId, "interaction.block.break", event);
+		appendTraceEnvelopeStart(json, sessionId, "interaction.block.attack.attempt", event);
+		appendCommonPayloadStart(json, event);
+		json.append("\"block\":");
+		appendBlockReference(json, event.block());
+		json.append(',');
+		json.append("\"hand\":\"").append(escapeJson(event.hand())).append("\",");
+		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
+		json.append("\"heldItem\":");
+		appendItemStackSnapshot(json, event.heldItem());
+		json.append("}}");
+		return json.toString();
+	}
+
+	private String serializeInteractionBlockBreakSuccessTraceEvent(
+		String sessionId,
+		InteractionBlockBreakSuccessTraceEvent event
+	) {
+		StringBuilder json = new StringBuilder(320);
+		appendTraceEnvelopeStart(json, sessionId, "interaction.block.break.success", event);
 		appendCommonPayloadStart(json, event);
 		json.append("\"block\":");
 		appendBlockReference(json, event.block());

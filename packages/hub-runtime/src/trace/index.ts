@@ -6,7 +6,10 @@ export const CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED = "player.look.ta
 export const CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED =
   "player.selected_slot.changed" as const;
 export const CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED = "player.hand_state.changed" as const;
-export const CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK = "interaction.block.break" as const;
+export const CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT =
+  "interaction.block.attack.attempt" as const;
+export const CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS =
+  "interaction.block.break.success" as const;
 export const CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION = "inventory.transaction" as const;
 
 export type RawTraceKind =
@@ -16,7 +19,8 @@ export type RawTraceKind =
   | typeof CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED
   | typeof CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED
   | typeof CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED
-  | typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK
+  | typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT
+  | typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS
   | typeof CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION;
 
 export type TraceBlockFace = "up" | "down" | "north" | "south" | "east" | "west";
@@ -169,7 +173,7 @@ export interface PlayerHandStateChangedTraceEvent {
   readonly payload: PlayerHandStateChangedTracePayload;
 }
 
-export interface InteractionBlockBreakTracePayload {
+export interface InteractionBlockTracePayload {
   readonly worldTick: number;
   readonly dimensionKey: string;
   readonly block: TraceBlockReference;
@@ -178,13 +182,22 @@ export interface InteractionBlockBreakTracePayload {
   readonly heldItem: TraceItemStackSnapshot;
 }
 
-export interface InteractionBlockBreakTraceEvent {
+export interface InteractionBlockAttackAttemptTraceEvent {
   readonly v: typeof CURRENT_MOD_TRACE_VERSION;
-  readonly kind: typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK;
+  readonly kind: typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT;
   readonly sessionId: string;
   readonly seq: number;
   readonly capturedAtMillis: number;
-  readonly payload: InteractionBlockBreakTracePayload;
+  readonly payload: InteractionBlockTracePayload;
+}
+
+export interface InteractionBlockBreakSuccessTraceEvent {
+  readonly v: typeof CURRENT_MOD_TRACE_VERSION;
+  readonly kind: typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS;
+  readonly sessionId: string;
+  readonly seq: number;
+  readonly capturedAtMillis: number;
+  readonly payload: InteractionBlockTracePayload;
 }
 
 export interface InventoryTransactionTracePayload {
@@ -211,7 +224,8 @@ export type CurrentModTraceEvent =
   | PlayerLookTargetChangedTraceEvent
   | PlayerSelectedSlotChangedTraceEvent
   | PlayerHandStateChangedTraceEvent
-  | InteractionBlockBreakTraceEvent
+  | InteractionBlockAttackAttemptTraceEvent
+  | InteractionBlockBreakSuccessTraceEvent
   | InventoryTransactionTraceEvent;
 export type SessionStartTraceEvent = CurrentModSessionStartTraceEvent;
 export type SessionEndTraceEvent = CurrentModSessionEndTraceEvent;
@@ -293,8 +307,10 @@ export function decodeCurrentModTraceEvent(value: unknown): RawTraceDecodeResult
       return decodePlayerSelectedSlotChangedTraceEvent(header.value);
     case CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED:
       return decodePlayerHandStateChangedTraceEvent(header.value);
-    case CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK:
-      return decodeInteractionBlockBreakTraceEvent(header.value);
+    case CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT:
+      return decodeInteractionBlockAttackAttemptTraceEvent(header.value);
+    case CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS:
+      return decodeInteractionBlockBreakSuccessTraceEvent(header.value);
     case CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION:
       return decodeInventoryTransactionTraceEvent(header.value);
     default:
@@ -538,8 +554,23 @@ function decodePlayerHandStateChangedTraceEvent(
   };
 }
 
-function decodeInteractionBlockBreakTraceEvent(
+function decodeInteractionBlockAttackAttemptTraceEvent(
   header: TraceHeader
+): RawTraceDecodeResult {
+  return decodeInteractionBlockTraceEvent(header, CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT);
+}
+
+function decodeInteractionBlockBreakSuccessTraceEvent(
+  header: TraceHeader
+): RawTraceDecodeResult {
+  return decodeInteractionBlockTraceEvent(header, CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS);
+}
+
+function decodeInteractionBlockTraceEvent(
+  header: TraceHeader,
+  kind:
+    | typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT
+    | typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS
 ): RawTraceDecodeResult {
   const payload = header.payload;
   const context = decodeCommonTraceContext(payload);
@@ -572,7 +603,7 @@ function decodeInteractionBlockBreakTraceEvent(
     ok: true,
     event: {
       v: CURRENT_MOD_TRACE_VERSION,
-      kind: CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK,
+      kind,
       sessionId: header.sessionId,
       seq: header.seq,
       capturedAtMillis: header.capturedAtMillis,
@@ -868,7 +899,8 @@ function isSupportedTraceKind(value: unknown): value is RawTraceKind {
     value === CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED ||
     value === CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED ||
     value === CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED ||
-    value === CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK ||
+    value === CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT ||
+    value === CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS ||
     value === CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION
   );
 }

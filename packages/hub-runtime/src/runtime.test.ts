@@ -8,12 +8,13 @@ import {
 import { evaluateDetectors } from "./detector/index.js";
 import { createEmptyProjectionSnapshot, reduceProjectionSnapshot } from "./projection/index.js";
 import {
+  CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS,
   CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION,
   CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE,
   CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED,
   CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED,
   decodeCurrentModTraceEvent,
-  type InteractionBlockBreakTraceEvent,
+  type InteractionBlockBreakSuccessTraceEvent,
   type InventoryTransactionTraceEvent,
   type ObservationSampleTraceEvent,
   type PlayerHandStateChangedTraceEvent,
@@ -294,10 +295,10 @@ function createBlockBreakTraceEvent(
   seq: number,
   blockId: string,
   dimensionKey = "minecraft:overworld"
-): InteractionBlockBreakTraceEvent {
+): InteractionBlockBreakSuccessTraceEvent {
   return {
     v: 1,
-    kind: "interaction.block.break",
+    kind: CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS,
     sessionId: "session-a",
     seq,
     capturedAtMillis,

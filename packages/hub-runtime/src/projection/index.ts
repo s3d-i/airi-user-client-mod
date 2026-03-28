@@ -6,13 +6,13 @@ import {
   type ToolCategory
 } from "../classification/index.js";
 import {
-  CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK,
+  CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS,
   CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION,
   CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE,
   CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED,
   CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED,
   CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED,
-  type InteractionBlockBreakTraceEvent,
+  type InteractionBlockBreakSuccessTraceEvent,
   type InventoryTransactionTraceEvent,
   type RawTraceEvent,
   type TraceItemStackSnapshot,
@@ -63,7 +63,7 @@ export interface MotionProjectionSnapshot {
 
 export interface InteractionWindowProjectionSnapshot {
   readonly windowMillis: number;
-  readonly recentBlockBreaks: readonly InteractionBlockBreakTraceEvent[];
+  readonly recentBlockBreaks: readonly InteractionBlockBreakSuccessTraceEvent[];
   readonly recentBreaksByResourceCategory: ResourceCategoryCountMap;
   readonly lastUpdatedAtMillis?: number;
 }
@@ -268,7 +268,7 @@ function reduceHandProjectionSnapshot(
         event.payload.offHand,
         event.capturedAtMillis
       );
-    case CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK:
+    case CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS:
       return {
         ...previous,
         selectedSlot: event.payload.selectedSlot,
@@ -329,7 +329,7 @@ function reduceInteractionWindowProjectionSnapshot(
   event: RawTraceEvent
 ): InteractionWindowProjectionSnapshot {
   const recentBlockBreaks = trimWindow(
-    event.kind === CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK
+    event.kind === CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS
       ? [...previous.recentBlockBreaks, event]
       : previous.recentBlockBreaks,
     event.capturedAtMillis,
@@ -379,7 +379,7 @@ function trimWindow<T extends RawTraceEvent>(
 }
 
 function aggregateBreaksByResourceCategory(
-  events: readonly InteractionBlockBreakTraceEvent[]
+  events: readonly InteractionBlockBreakSuccessTraceEvent[]
 ): ResourceCategoryCountMap {
   const counts: ResourceCategoryCountMap = {};
 
