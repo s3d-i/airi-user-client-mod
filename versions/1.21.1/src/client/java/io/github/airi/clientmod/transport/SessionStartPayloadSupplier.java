@@ -3,6 +3,8 @@ package io.github.airi.clientmod.transport;
 import io.github.airi.clientmod.AiriUserClientMod;
 import io.github.airi.clientmod.observation.InventoryDeltaDetector;
 import io.github.airi.clientmod.observation.PeriodicMotionSampler;
+import io.github.airi.clientmod.transport.contract.SessionStartPayload;
+import io.github.airi.clientmod.transport.contract.TraceEventKinds;
 import net.fabricmc.loader.api.FabricLoader;
 
 public final class SessionStartPayloadSupplier {

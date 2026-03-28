@@ -1,4 +1,4 @@
-package io.github.airi.clientmod.transport;
+package io.github.airi.clientmod.transport.contract;
 
 import java.util.List;
 

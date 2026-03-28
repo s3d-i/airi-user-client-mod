@@ -3,6 +3,8 @@ package io.github.airi.clientmod.transport;
 import java.util.List;
 import java.util.Objects;
 
+import io.github.airi.clientmod.transport.contract.SessionStartPayload;
+import io.github.airi.clientmod.transport.contract.TraceEventKinds;
 import io.github.airi.clientmod.core.trace.InteractionBlockAttackAttemptTraceEvent;
 import io.github.airi.clientmod.core.trace.InteractionBlockBreakSuccessTraceEvent;
 import io.github.airi.clientmod.core.trace.InventoryTransactionTraceEvent;

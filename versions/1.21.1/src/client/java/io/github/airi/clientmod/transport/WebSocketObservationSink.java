@@ -11,6 +11,7 @@ import java.util.concurrent.CompletionStage;
 import io.github.airi.clientmod.AiriUserClientMod;
 import io.github.airi.clientmod.core.trace.ObservationEmitter;
 import io.github.airi.clientmod.core.trace.TraceEvent;
+import io.github.airi.clientmod.transport.contract.SessionStartPayload;
 
 public final class WebSocketObservationSink implements ObservationEmitter {
 	private static final String HUB_INGRESS_WS_URI_PROPERTY = "airi.hub.ingress.ws.uri";
