@@ -60,8 +60,9 @@ public final class ObservationOrchestrator {
 		this.emitter = emitter;
 		this.worldSessionTracker = worldSessionTracker;
 		this.snapshotReader = snapshotReader;
-		this.inputInteractionCaptureStage = new InputInteractionCaptureStage(snapshotReader, traceEventFactory);
-		this.blockBreakCaptureStage = new BlockBreakCaptureStage(snapshotReader, traceEventFactory);
+		InteractionContextCapture interactionContextCapture = new InteractionContextCapture(snapshotReader);
+		this.inputInteractionCaptureStage = new InputInteractionCaptureStage(interactionContextCapture, traceEventFactory);
+		this.blockBreakCaptureStage = new BlockBreakCaptureStage(interactionContextCapture, traceEventFactory);
 		// Capture stage list order is the canonical flush order for raw evidence emission.
 		this.captureStages = List.of(
 			new ChangedStateCaptureStage(
@@ -77,36 +78,13 @@ public final class ObservationOrchestrator {
 		);
 	}
 
-	// Temporary compatibility ctor for call sites that still pass the removed matcher dependency.
-	@Deprecated(forRemoval = true)
-	ObservationOrchestrator(
-		ObservationEmitter emitter,
-		WorldSessionTracker worldSessionTracker,
-		ClientSnapshotReader snapshotReader,
-		PeriodicMotionSampler periodicMotionSampler,
-		LookTargetChangeDetector lookTargetChangeDetector,
-		SelectedSlotChangeDetector selectedSlotChangeDetector,
-		HandStateChangeDetector handStateChangeDetector,
-		InventoryDeltaDetector inventoryDeltaDetector,
-		BlockBreakInteractionMatcher ignoredBlockBreakInteractionMatcher,
-		TraceEventFactory traceEventFactory
-	) {
-		this(
-			emitter,
-			worldSessionTracker,
-			snapshotReader,
-			periodicMotionSampler,
-			lookTargetChangeDetector,
-			selectedSlotChangeDetector,
-			handStateChangeDetector,
-			inventoryDeltaDetector,
-			traceEventFactory
-		);
-	}
-
 	public void onEndClientTick(MinecraftClient client) {
-		if (client.world == null || client.player == null || !worldSessionTracker.hasActiveSession()) {
-			resetTransientState();
+		if (client.world == null || client.player == null) {
+			resetTransientState(ResetScope.WORLD_LIFETIME_TRANSIENT);
+			return;
+		}
+		if (!worldSessionTracker.hasActiveSession()) {
+			resetTransientState(ResetScope.PER_SESSION_TRANSIENT);
 			return;
 		}
 
@@ -213,20 +191,54 @@ public final class ObservationOrchestrator {
 		blockBreakCaptureStage.recordOutcome(world, player, pos, state);
 	}
 
-	private void resetTransientState() {
+	private void resetTransientState(ResetScope scope) {
 		for (CaptureStage stage : captureStages) {
-			stage.reset();
+			stage.reset(scope);
 		}
 	}
 
 	private interface CaptureStage {
 		void collect(ClientSnapshot snapshot, DraftCollector collector);
 
-		void reset();
+		void reset(ResetScope scope);
+	}
+
+	private enum ResetScope {
+		PER_TICK_TRANSIENT,
+		PER_SESSION_TRANSIENT,
+		WORLD_LIFETIME_TRANSIENT
 	}
 
 	private interface DraftMaterializer {
 		TraceEvent materialize(WorldSessionTracker.SampleTraceContext traceContext);
+	}
+
+	private record InteractionActionContext(int selectedSlot, TraceEvent.ItemStackSnapshot heldItem) {
+	}
+
+	private static final class InteractionContextCapture {
+		private final ClientSnapshotReader snapshotReader;
+
+		InteractionContextCapture(ClientSnapshotReader snapshotReader) {
+			this.snapshotReader = snapshotReader;
+		}
+
+		InteractionActionContext captureForHand(PlayerEntity player, Hand hand) {
+			return new InteractionActionContext(player.getInventory().selectedSlot, captureHeldItem(player, hand));
+		}
+
+		InteractionActionContext captureMainHand(PlayerEntity player) {
+			return new InteractionActionContext(
+				player.getInventory().selectedSlot,
+				snapshotReader.captureItemStack(player.getMainHandStack())
+			);
+		}
+
+		private TraceEvent.ItemStackSnapshot captureHeldItem(PlayerEntity player, Hand hand) {
+			return hand == Hand.OFF_HAND
+				? snapshotReader.captureItemStack(player.getOffHandStack())
+				: snapshotReader.captureItemStack(player.getMainHandStack());
+		}
 	}
 
 	private record DraftOrder(
@@ -362,7 +374,7 @@ public final class ObservationOrchestrator {
 		}
 
 		@Override
-		public void reset() {
+		public void reset(ResetScope scope) {
 			lookTargetChangeDetector.reset();
 			selectedSlotChangeDetector.reset();
 			handStateChangeDetector.reset();
@@ -373,7 +385,7 @@ public final class ObservationOrchestrator {
 		private static final String MAIN_HAND_KEY = "main_hand";
 		private static final String OFF_HAND_KEY = "off_hand";
 
-		private final ClientSnapshotReader snapshotReader;
+		private final InteractionContextCapture interactionContextCapture;
 		private final TraceEventFactory traceEventFactory;
 		private final List<ItemUseAttemptSignal> pendingItemUseSignals = new ArrayList<>();
 		private final List<BlockUseAttemptSignal> pendingBlockUseSignals = new ArrayList<>();
@@ -381,13 +393,14 @@ public final class ObservationOrchestrator {
 		private final List<EntityAttackAttemptSignal> pendingEntityAttackSignals = new ArrayList<>();
 		private long nextSignalOrder = 1L;
 
-		InputInteractionCaptureStage(ClientSnapshotReader snapshotReader, TraceEventFactory traceEventFactory) {
-			this.snapshotReader = snapshotReader;
+		InputInteractionCaptureStage(InteractionContextCapture interactionContextCapture, TraceEventFactory traceEventFactory) {
+			this.interactionContextCapture = interactionContextCapture;
 			this.traceEventFactory = traceEventFactory;
 		}
 
 		void recordItemUseAttempt(PlayerEntity player, World world, Hand hand) {
 			String handKey = toHandKey(hand);
+			InteractionActionContext actionContext = interactionContextCapture.captureForHand(player, hand);
 			// selectedSlot/heldItem are callback-time action context, not flush-time snapshot state.
 			pendingItemUseSignals.add(
 				new ItemUseAttemptSignal(
@@ -395,8 +408,8 @@ public final class ObservationOrchestrator {
 					world.getRegistryKey().getValue().toString(),
 					world.getTime(),
 					handKey,
-					player.getInventory().selectedSlot,
-					captureHeldItem(player, hand)
+					actionContext.selectedSlot(),
+					actionContext.heldItem()
 				)
 			);
 		}
@@ -404,6 +417,7 @@ public final class ObservationOrchestrator {
 		void recordBlockUseAttempt(PlayerEntity player, World world, Hand hand, BlockHitResult hitResult) {
 			BlockPos immutablePos = hitResult.getBlockPos().toImmutable();
 			String handKey = toHandKey(hand);
+			InteractionActionContext actionContext = interactionContextCapture.captureForHand(player, hand);
 			// selectedSlot/heldItem are callback-time action context, not flush-time snapshot state.
 			pendingBlockUseSignals.add(
 				new BlockUseAttemptSignal(
@@ -414,8 +428,8 @@ public final class ObservationOrchestrator {
 					immutablePos,
 					hitResult.getSide() == null ? null : hitResult.getSide().asString(),
 					handKey,
-					player.getInventory().selectedSlot,
-					captureHeldItem(player, hand)
+					actionContext.selectedSlot(),
+					actionContext.heldItem()
 				)
 			);
 		}
@@ -428,6 +442,7 @@ public final class ObservationOrchestrator {
 			EntityHitResult ignoredHitResult
 		) {
 			String handKey = toHandKey(hand);
+			InteractionActionContext actionContext = interactionContextCapture.captureForHand(player, hand);
 			// selectedSlot/heldItem are callback-time action context, not flush-time snapshot state.
 			pendingEntityUseSignals.add(
 				new EntityUseAttemptSignal(
@@ -436,8 +451,8 @@ public final class ObservationOrchestrator {
 					world.getTime(),
 					captureEntityReference(entity),
 					handKey,
-					player.getInventory().selectedSlot,
-					captureHeldItem(player, hand)
+					actionContext.selectedSlot(),
+					actionContext.heldItem()
 				)
 			);
 		}
@@ -450,6 +465,7 @@ public final class ObservationOrchestrator {
 			EntityHitResult ignoredHitResult
 		) {
 			String handKey = toHandKey(hand);
+			InteractionActionContext actionContext = interactionContextCapture.captureForHand(player, hand);
 			// selectedSlot/heldItem are callback-time action context, not flush-time snapshot state.
 			pendingEntityAttackSignals.add(
 				new EntityAttackAttemptSignal(
@@ -458,8 +474,8 @@ public final class ObservationOrchestrator {
 					world.getTime(),
 					captureEntityReference(entity),
 					handKey,
-					player.getInventory().selectedSlot,
-					captureHeldItem(player, hand)
+					actionContext.selectedSlot(),
+					actionContext.heldItem()
 				)
 			);
 		}
@@ -555,7 +571,7 @@ public final class ObservationOrchestrator {
 		}
 
 		@Override
-		public void reset() {
+		public void reset(ResetScope scope) {
 			clearPendingSignals();
 			nextSignalOrder = 1L;
 		}
@@ -572,12 +588,6 @@ public final class ObservationOrchestrator {
 			pendingBlockUseSignals.clear();
 			pendingEntityUseSignals.clear();
 			pendingEntityAttackSignals.clear();
-		}
-
-		private TraceEvent.ItemStackSnapshot captureHeldItem(PlayerEntity player, Hand hand) {
-			return hand == Hand.OFF_HAND
-				? snapshotReader.captureItemStack(player.getOffHandStack())
-				: snapshotReader.captureItemStack(player.getMainHandStack());
 		}
 
 		private static TraceEvent.LookTargetEntity captureEntityReference(Entity entity) {
@@ -671,7 +681,7 @@ public final class ObservationOrchestrator {
 		}
 
 		@Override
-		public void reset() {
+		public void reset(ResetScope scope) {
 			inventoryDeltaDetector.reset();
 		}
 	}
@@ -699,7 +709,7 @@ public final class ObservationOrchestrator {
 		}
 
 		@Override
-		public void reset() {
+		public void reset(ResetScope scope) {
 			periodicMotionSampler.reset();
 		}
 	}
@@ -710,20 +720,21 @@ public final class ObservationOrchestrator {
 		private static final long MATCH_WINDOW_TICKS = 5L;
 		private static final int MAX_PENDING_ATTEMPTS = 16;
 
-		private final ClientSnapshotReader snapshotReader;
+		private final InteractionContextCapture interactionContextCapture;
 		private final TraceEventFactory traceEventFactory;
 		private final List<BlockBreakSignal> pendingSignals = new ArrayList<>();
 		private final ArrayDeque<BlockBreakPendingAttempt> pendingAttempts = new ArrayDeque<>();
 
 		private long nextSignalOrder = 1L;
 
-		BlockBreakCaptureStage(ClientSnapshotReader snapshotReader, TraceEventFactory traceEventFactory) {
-			this.snapshotReader = snapshotReader;
+		BlockBreakCaptureStage(InteractionContextCapture interactionContextCapture, TraceEventFactory traceEventFactory) {
+			this.interactionContextCapture = interactionContextCapture;
 			this.traceEventFactory = traceEventFactory;
 		}
 
 		void recordAttempt(PlayerEntity player, World world, Hand hand, BlockPos pos, Direction direction) {
 			BlockPos immutablePos = pos.toImmutable();
+			InteractionActionContext actionContext = interactionContextCapture.captureMainHand(player);
 			// selectedSlot/heldItem are callback-time action context, not flush-time snapshot state.
 			pendingSignals.add(
 				new BlockBreakAttemptSignal(
@@ -734,13 +745,14 @@ public final class ObservationOrchestrator {
 					Registries.BLOCK.getId(world.getBlockState(immutablePos).getBlock()).toString(),
 					direction == null ? null : direction.asString(),
 					hand == Hand.OFF_HAND ? "off_hand" : MAIN_HAND_KEY,
-					player.getInventory().selectedSlot,
-					snapshotReader.captureItemStack(player.getMainHandStack())
+					actionContext.selectedSlot(),
+					actionContext.heldItem()
 				)
 			);
 		}
 
 		void recordOutcome(ClientWorld world, ClientPlayerEntity player, BlockPos pos, BlockState state) {
+			InteractionActionContext actionContext = interactionContextCapture.captureMainHand(player);
 			// selectedSlot/heldItem are callback-time action context, not flush-time snapshot state.
 			pendingSignals.add(
 				new BlockBreakOutcomeSignal(
@@ -749,8 +761,8 @@ public final class ObservationOrchestrator {
 					world.getTime(),
 					pos.toImmutable(),
 					Registries.BLOCK.getId(state.getBlock()).toString(),
-					player.getInventory().selectedSlot,
-					snapshotReader.captureItemStack(player.getMainHandStack())
+					actionContext.selectedSlot(),
+					actionContext.heldItem()
 				)
 			);
 		}
@@ -826,7 +838,7 @@ public final class ObservationOrchestrator {
 		}
 
 		@Override
-		public void reset() {
+		public void reset(ResetScope scope) {
 			pendingAttempts.clear();
 			pendingSignals.clear();
 			nextSignalOrder = 1L;
