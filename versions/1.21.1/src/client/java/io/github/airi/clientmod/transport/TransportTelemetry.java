@@ -7,7 +7,7 @@ public interface TransportTelemetry {
 	default void onConnectAttemptStarted() {
 	}
 
-	default void onStateChanged(TransportStateTransition transition) {
+	default void onStateChanged(TransportStatusStore.TransportStateTransition transition) {
 	}
 
 	default void onSendSucceeded(long latencyMillis) {

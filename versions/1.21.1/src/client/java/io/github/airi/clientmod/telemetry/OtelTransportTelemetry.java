@@ -3,8 +3,8 @@ package io.github.airi.clientmod.telemetry;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-import io.github.airi.clientmod.transport.TransportConnectionState;
-import io.github.airi.clientmod.transport.TransportStateTransition;
+import io.github.airi.clientmod.transport.TransportStatusStore.TransportConnectionState;
+import io.github.airi.clientmod.transport.TransportStatusStore.TransportStateTransition;
 import io.github.airi.clientmod.transport.TransportTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;

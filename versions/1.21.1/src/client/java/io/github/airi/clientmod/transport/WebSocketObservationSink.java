@@ -335,7 +335,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 
 		String message = summarize(error);
 		statusStore.recordSendFailure("send failed: " + message);
-		TransportStateTransition transition = statusStore.markError("send failed: " + message);
+		TransportStatusStore.TransportStateTransition transition = statusStore.markError("send failed: " + message);
 		telemetry.onStateChanged(transition);
 		telemetry.onConnectionFailure("send", error, -1L);
 		AiriUserClientMod.LOGGER.warn("Hub ingress websocket send failed: {}", message);
@@ -362,7 +362,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			prependSessionReannounce(socket);
 		}
 
-		TransportStateTransition transition = statusStore.markOpen();
+		TransportStatusStore.TransportStateTransition transition = statusStore.markOpen();
 		telemetry.onStateChanged(transition);
 		telemetry.onConnectionOpened(connectDurationMillis);
 		AiriUserClientMod.LOGGER.info("Hub ingress websocket connected to {}", endpointUri);
@@ -370,7 +370,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	}
 
 	private void handleClosed(WebSocket socket, int statusCode, String reason) {
-		TransportStateTransition transition;
+		TransportStatusStore.TransportStateTransition transition;
 		String closeReason = summarizeClose(statusCode, reason);
 		boolean wasSending;
 		boolean shouldReconnect;
@@ -406,7 +406,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	}
 
 	private void handleSocketError(WebSocket socket, Throwable error) {
-		TransportStateTransition transition;
+		TransportStatusStore.TransportStateTransition transition;
 		boolean wasSending;
 		boolean shouldReconnect;
 
@@ -455,7 +455,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			return;
 		}
 
-		TransportStateTransition transition = statusStore.markConnecting();
+		TransportStatusStore.TransportStateTransition transition = statusStore.markConnecting();
 		telemetry.onConnectAttemptStarted();
 		telemetry.onStateChanged(transition);
 
@@ -477,7 +477,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		}
 
 		String message = summarize(error);
-		TransportStateTransition transition = statusStore.markError("connect failed: " + message);
+		TransportStatusStore.TransportStateTransition transition = statusStore.markError("connect failed: " + message);
 		telemetry.onStateChanged(transition);
 		telemetry.onConnectionFailure("connect", error, connectDurationMillis);
 		AiriUserClientMod.LOGGER.warn("Hub ingress websocket connect failed: {}", message);
