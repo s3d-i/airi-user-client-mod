@@ -38,6 +38,8 @@ export type {
   ResourceCategoryCountMap
 } from "./projection/index.js";
 export type {
+  CanonicalTraceEvent,
+  CurrentModWireTraceEvent,
   CurrentModObservationSampleTraceEvent,
   CurrentModObservationSampleTracePayload,
   CurrentModSessionEndTraceEvent,
@@ -56,9 +58,6 @@ export type {
   PlayerLookTargetChangedTracePayload,
   PlayerSelectedSlotChangedTraceEvent,
   PlayerSelectedSlotChangedTracePayload,
-  RawTraceDecodeFailure,
-  RawTraceDecodeResult,
-  RawTraceDecodeSuccess,
   RawTraceEvent,
   SessionEndTraceEvent,
   SessionStartTraceEvent,

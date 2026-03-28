@@ -78,30 +78,22 @@ export interface TraceEvidenceRef {
   readonly capturedAtMillis: number;
 }
 
-export type CurrentModTraceKind = RawTraceKind;
-
-interface CurrentModTraceEventBase {
+interface CurrentModWireTraceEventBase {
   readonly v: typeof CURRENT_MOD_TRACE_VERSION;
-  readonly kind: CurrentModTraceKind;
+  readonly kind: RawTraceKind;
   readonly sessionId: string;
   readonly seq: number;
   readonly capturedAtMillis: number;
 }
 
-export interface CurrentModSessionStartTraceEvent extends CurrentModTraceEventBase {
+export interface CurrentModSessionStartTraceEvent extends CurrentModWireTraceEventBase {
   readonly kind: typeof CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START;
 }
 
-export interface CurrentModSessionEndTraceEvent extends CurrentModTraceEventBase {
+export interface CurrentModSessionEndTraceEvent extends CurrentModWireTraceEventBase {
   readonly kind: typeof CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END;
 }
 
-/**
- * Initial/current-state raw trace contract for local hub ingress.
- *
- * This mirrors the Java mod's current emit shape exactly. Do not add or rename
- * fields here unless the Java-side websocket payload changes as well.
- */
 export interface CurrentModObservationSampleTracePayload {
   readonly worldTick: number;
   readonly fps: number;
@@ -115,10 +107,7 @@ export interface CurrentModObservationSampleTracePayload {
   readonly targetDescription: string;
 }
 
-/**
- * Initial/current-state observation sample emitted by the Java mod.
- */
-export interface CurrentModObservationSampleTraceEvent extends CurrentModTraceEventBase {
+export interface CurrentModObservationSampleTraceEvent extends CurrentModWireTraceEventBase {
   readonly kind: typeof CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE;
   readonly payload: CurrentModObservationSampleTracePayload;
 }
@@ -129,12 +118,8 @@ export interface PlayerLookTargetChangedTracePayload {
   readonly target: TraceLookTarget;
 }
 
-export interface PlayerLookTargetChangedTraceEvent {
-  readonly v: typeof CURRENT_MOD_TRACE_VERSION;
+export interface PlayerLookTargetChangedTraceEvent extends CurrentModWireTraceEventBase {
   readonly kind: typeof CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED;
-  readonly sessionId: string;
-  readonly seq: number;
-  readonly capturedAtMillis: number;
   readonly payload: PlayerLookTargetChangedTracePayload;
 }
 
@@ -147,12 +132,8 @@ export interface PlayerSelectedSlotChangedTracePayload {
   readonly offHand: TraceItemStackSnapshot;
 }
 
-export interface PlayerSelectedSlotChangedTraceEvent {
-  readonly v: typeof CURRENT_MOD_TRACE_VERSION;
+export interface PlayerSelectedSlotChangedTraceEvent extends CurrentModWireTraceEventBase {
   readonly kind: typeof CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED;
-  readonly sessionId: string;
-  readonly seq: number;
-  readonly capturedAtMillis: number;
   readonly payload: PlayerSelectedSlotChangedTracePayload;
 }
 
@@ -164,12 +145,8 @@ export interface PlayerHandStateChangedTracePayload {
   readonly offHand: TraceItemStackSnapshot;
 }
 
-export interface PlayerHandStateChangedTraceEvent {
-  readonly v: typeof CURRENT_MOD_TRACE_VERSION;
+export interface PlayerHandStateChangedTraceEvent extends CurrentModWireTraceEventBase {
   readonly kind: typeof CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED;
-  readonly sessionId: string;
-  readonly seq: number;
-  readonly capturedAtMillis: number;
   readonly payload: PlayerHandStateChangedTracePayload;
 }
 
@@ -182,21 +159,13 @@ export interface InteractionBlockTracePayload {
   readonly heldItem: TraceItemStackSnapshot;
 }
 
-export interface InteractionBlockAttackAttemptTraceEvent {
-  readonly v: typeof CURRENT_MOD_TRACE_VERSION;
+export interface InteractionBlockAttackAttemptTraceEvent extends CurrentModWireTraceEventBase {
   readonly kind: typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT;
-  readonly sessionId: string;
-  readonly seq: number;
-  readonly capturedAtMillis: number;
   readonly payload: InteractionBlockTracePayload;
 }
 
-export interface InteractionBlockBreakSuccessTraceEvent {
-  readonly v: typeof CURRENT_MOD_TRACE_VERSION;
+export interface InteractionBlockBreakSuccessTraceEvent extends CurrentModWireTraceEventBase {
   readonly kind: typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS;
-  readonly sessionId: string;
-  readonly seq: number;
-  readonly capturedAtMillis: number;
   readonly payload: InteractionBlockTracePayload;
 }
 
@@ -208,16 +177,12 @@ export interface InventoryTransactionTracePayload {
   readonly changedSlots: readonly TraceInventorySlotDelta[];
 }
 
-export interface InventoryTransactionTraceEvent {
-  readonly v: typeof CURRENT_MOD_TRACE_VERSION;
+export interface InventoryTransactionTraceEvent extends CurrentModWireTraceEventBase {
   readonly kind: typeof CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION;
-  readonly sessionId: string;
-  readonly seq: number;
-  readonly capturedAtMillis: number;
   readonly payload: InventoryTransactionTracePayload;
 }
 
-export type CurrentModTraceEvent =
+export type CurrentModWireTraceEvent =
   | CurrentModSessionStartTraceEvent
   | CurrentModSessionEndTraceEvent
   | CurrentModObservationSampleTraceEvent
@@ -227,95 +192,74 @@ export type CurrentModTraceEvent =
   | InteractionBlockAttackAttemptTraceEvent
   | InteractionBlockBreakSuccessTraceEvent
   | InventoryTransactionTraceEvent;
+
+export type CurrentModTraceEvent = CurrentModWireTraceEvent;
+
 export type SessionStartTraceEvent = CurrentModSessionStartTraceEvent;
 export type SessionEndTraceEvent = CurrentModSessionEndTraceEvent;
 export type ObservationSampleTracePayload = CurrentModObservationSampleTracePayload;
 export type ObservationSampleTraceEvent = CurrentModObservationSampleTraceEvent;
-export type RawTraceEvent = CurrentModTraceEvent;
 
-export interface RawTraceDecodeSuccess {
-  readonly ok: true;
-  readonly event: RawTraceEvent;
+export type CanonicalTraceEvent =
+  | SessionStartTraceEvent
+  | SessionEndTraceEvent
+  | ObservationSampleTraceEvent
+  | PlayerLookTargetChangedTraceEvent
+  | PlayerSelectedSlotChangedTraceEvent
+  | PlayerHandStateChangedTraceEvent
+  | InteractionBlockAttackAttemptTraceEvent
+  | InteractionBlockBreakSuccessTraceEvent
+  | InventoryTransactionTraceEvent;
+
+export type RawTraceEvent = CanonicalTraceEvent;
+
+type NonSessionTraceKind = Exclude<RawTraceKind, "trace.session.start" | "trace.session.end">;
+
+interface ParsedTraceFrame {
+  readonly kind: RawTraceKind;
+  readonly sessionId: string;
+  readonly seq: number;
+  readonly capturedAtMillis: number;
+  readonly payload?: unknown;
 }
 
-export interface RawTraceDecodeFailure {
-  readonly ok: false;
-  readonly reason: string;
+interface CommonTraceContext {
+  readonly worldTick: number;
+  readonly dimensionKey: string;
 }
 
-export type RawTraceDecodeResult = RawTraceDecodeSuccess | RawTraceDecodeFailure;
+export function decodeCurrentModTraceEvent(input: unknown): CanonicalTraceEvent {
+  const frame = parseTraceFrame(input);
 
-export function decodeCurrentModTraceEvent(value: unknown): RawTraceDecodeResult {
-  if (!isRecord(value)) {
-    return { ok: false, reason: "frame must decode to an object" };
-  }
-
-  if (value.v !== CURRENT_MOD_TRACE_VERSION) {
-    return { ok: false, reason: "unsupported trace version" };
-  }
-
-  if (typeof value.sessionId !== "string" || value.sessionId.length === 0) {
-    return { ok: false, reason: "sessionId must be a non-empty string" };
-  }
-
-  if (!isIntegerNumber(value.seq)) {
-    return { ok: false, reason: "seq must be an integer number" };
-  }
-
-  if (!isIntegerNumber(value.capturedAtMillis)) {
-    return { ok: false, reason: "capturedAtMillis must be an integer number" };
-  }
-
-  if (value.kind === CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START) {
+  if (frame.kind === CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START) {
     return {
-      ok: true,
-      event: {
-        v: CURRENT_MOD_TRACE_VERSION,
-        kind: CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START,
-        sessionId: value.sessionId,
-        seq: value.seq,
-        capturedAtMillis: value.capturedAtMillis
-      }
+      v: CURRENT_MOD_TRACE_VERSION,
+      kind: CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START,
+      sessionId: frame.sessionId,
+      seq: frame.seq,
+      capturedAtMillis: frame.capturedAtMillis
     };
   }
 
-  if (value.kind === CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END) {
+  if (frame.kind === CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END) {
     return {
-      ok: true,
-      event: {
-        v: CURRENT_MOD_TRACE_VERSION,
-        kind: CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END,
-        sessionId: value.sessionId,
-        seq: value.seq,
-        capturedAtMillis: value.capturedAtMillis
-      }
+      v: CURRENT_MOD_TRACE_VERSION,
+      kind: CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END,
+      sessionId: frame.sessionId,
+      seq: frame.seq,
+      capturedAtMillis: frame.capturedAtMillis
     };
   }
 
-  const header = decodeTraceHeader(value);
+  const payload = parsePayload(frame.payload);
+  const base = {
+    v: CURRENT_MOD_TRACE_VERSION,
+    sessionId: frame.sessionId,
+    seq: frame.seq,
+    capturedAtMillis: frame.capturedAtMillis
+  };
 
-  if (!header.ok) {
-    return header;
-  }
-
-  switch (value.kind) {
-    case CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE:
-      return decodeObservationSampleTraceEvent(header.value);
-    case CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED:
-      return decodePlayerLookTargetChangedTraceEvent(header.value);
-    case CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED:
-      return decodePlayerSelectedSlotChangedTraceEvent(header.value);
-    case CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED:
-      return decodePlayerHandStateChangedTraceEvent(header.value);
-    case CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT:
-      return decodeInteractionBlockAttackAttemptTraceEvent(header.value);
-    case CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS:
-      return decodeInteractionBlockBreakSuccessTraceEvent(header.value);
-    case CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION:
-      return decodeInventoryTransactionTraceEvent(header.value);
-    default:
-      return { ok: false, reason: "unsupported trace kind" };
-  }
+  return decodePayloadTraceEvent(frame.kind, payload, base);
 }
 
 export function createRawTraceId(event: Pick<RawTraceEvent, "sessionId" | "seq">): string {
@@ -332,563 +276,349 @@ export function toTraceEvidenceRef(event: RawTraceEvent): TraceEvidenceRef {
   };
 }
 
-interface DecodeValueSuccess<T> {
-  readonly ok: true;
-  readonly value: T;
-}
-
-interface DecodeValueFailure {
-  readonly ok: false;
-  readonly reason: string;
-}
-
-type DecodeValueResult<T> = DecodeValueSuccess<T> | DecodeValueFailure;
-
-interface TraceHeader {
-  readonly sessionId: string;
-  readonly seq: number;
-  readonly capturedAtMillis: number;
-  readonly kind: RawTraceKind;
-  readonly payload: Record<string, unknown>;
-}
-
-interface CommonTraceContext {
-  readonly worldTick: number;
-  readonly dimensionKey: string;
-}
-
-function decodeTraceHeader(value: Record<string, unknown>): DecodeValueResult<TraceHeader> {
-  if (!isSupportedTraceKind(value.kind)) {
-    return { ok: false, reason: "unsupported trace kind" };
+function decodePayloadTraceEvent(
+  kind: NonSessionTraceKind,
+  payload: Record<string, unknown>,
+  base: {
+    readonly v: typeof CURRENT_MOD_TRACE_VERSION;
+    readonly sessionId: string;
+    readonly seq: number;
+    readonly capturedAtMillis: number;
   }
+): CanonicalTraceEvent {
+  const context = parseCommonTraceContext(payload);
 
-  if (!isRecord(value.payload)) {
-    return { ok: false, reason: "payload must be an object" };
+  switch (kind) {
+    case CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE:
+      return {
+        ...base,
+        kind,
+        payload: {
+          worldTick: context.worldTick,
+          fps: parseIntegerNumber(payload.fps, "payload.fps must be an integer number"),
+          dimensionKey: context.dimensionKey,
+          x: parseFiniteNumber(payload.x, "payload position values must be finite numbers"),
+          y: parseFiniteNumber(payload.y, "payload position values must be finite numbers"),
+          z: parseFiniteNumber(payload.z, "payload position values must be finite numbers"),
+          vx: parseFiniteNumber(payload.vx, "payload velocity values must be finite numbers"),
+          vy: parseFiniteNumber(payload.vy, "payload velocity values must be finite numbers"),
+          vz: parseFiniteNumber(payload.vz, "payload velocity values must be finite numbers"),
+          targetDescription: parseString(
+            payload.targetDescription,
+            "payload.targetDescription must be a string"
+          )
+        }
+      };
+
+    case CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED:
+      return {
+        ...base,
+        kind,
+        payload: {
+          worldTick: context.worldTick,
+          dimensionKey: context.dimensionKey,
+          target: parseLookTarget(payload.target, "payload.target")
+        }
+      };
+
+    case CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED:
+      return {
+        ...base,
+        kind,
+        payload: {
+          worldTick: context.worldTick,
+          dimensionKey: context.dimensionKey,
+          previousSelectedSlot: parseIntegerNumber(
+            payload.previousSelectedSlot,
+            "payload.previousSelectedSlot must be an integer number"
+          ),
+          selectedSlot: parseIntegerNumber(
+            payload.selectedSlot,
+            "payload.selectedSlot must be an integer number"
+          ),
+          mainHand: parseItemStackSnapshot(payload.mainHand, "payload.mainHand"),
+          offHand: parseItemStackSnapshot(payload.offHand, "payload.offHand")
+        }
+      };
+
+    case CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED:
+      return {
+        ...base,
+        kind,
+        payload: {
+          worldTick: context.worldTick,
+          dimensionKey: context.dimensionKey,
+          selectedSlot: parseIntegerNumber(
+            payload.selectedSlot,
+            "payload.selectedSlot must be an integer number"
+          ),
+          mainHand: parseItemStackSnapshot(payload.mainHand, "payload.mainHand"),
+          offHand: parseItemStackSnapshot(payload.offHand, "payload.offHand")
+        }
+      };
+
+    case CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT:
+    case CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS:
+      return {
+        ...base,
+        kind,
+        payload: {
+          worldTick: context.worldTick,
+          dimensionKey: context.dimensionKey,
+          block: parseBlockReference(payload.block, "payload.block"),
+          hand: parseTraceHandType(payload.hand),
+          selectedSlot: parseIntegerNumber(
+            payload.selectedSlot,
+            "payload.selectedSlot must be an integer number"
+          ),
+          heldItem: parseItemStackSnapshot(payload.heldItem, "payload.heldItem")
+        }
+      };
+
+    case CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION:
+      return {
+        ...base,
+        kind,
+        payload: {
+          worldTick: context.worldTick,
+          dimensionKey: context.dimensionKey,
+          containerKind: parseNonEmptyString(
+            payload.containerKind,
+            "payload.containerKind must be a non-empty string"
+          ),
+          source: parseNonEmptyString(payload.source, "payload.source must be a non-empty string"),
+          changedSlots: parseInventorySlotDeltaList(payload.changedSlots)
+        }
+      };
+  }
+}
+
+function parseTraceFrame(input: unknown): ParsedTraceFrame {
+  const frame = parseRecord(input, "frame must decode to an object");
+
+  if (frame.v !== CURRENT_MOD_TRACE_VERSION) {
+    fail("unsupported trace version");
   }
 
   return {
-    ok: true,
-    value: {
-      sessionId: value.sessionId as string,
-      seq: value.seq as number,
-      capturedAtMillis: value.capturedAtMillis as number,
-      kind: value.kind,
-      payload: value.payload
-    }
+    kind: parseTraceKind(frame.kind),
+    sessionId: parseNonEmptyString(frame.sessionId, "sessionId must be a non-empty string"),
+    seq: parseIntegerNumber(frame.seq, "seq must be an integer number"),
+    capturedAtMillis: parseIntegerNumber(
+      frame.capturedAtMillis,
+      "capturedAtMillis must be an integer number"
+    ),
+    payload: frame.payload
   };
 }
 
-function decodeObservationSampleTraceEvent(header: TraceHeader): RawTraceDecodeResult {
-  const payload = header.payload;
-  const context = decodeCommonTraceContext(payload);
+function parsePayload(value: unknown): Record<string, unknown> {
+  return parseRecord(value, "payload must be an object");
+}
 
-  if (!context.ok) {
-    return context;
-  }
-
-  if (!isIntegerNumber(payload.fps)) {
-    return { ok: false, reason: "payload.fps must be an integer number" };
-  }
-
-  if (!isFiniteNumber(payload.x) || !isFiniteNumber(payload.y) || !isFiniteNumber(payload.z)) {
-    return { ok: false, reason: "payload position values must be finite numbers" };
-  }
-
-  if (!isFiniteNumber(payload.vx) || !isFiniteNumber(payload.vy) || !isFiniteNumber(payload.vz)) {
-    return { ok: false, reason: "payload velocity values must be finite numbers" };
-  }
-
-  if (typeof payload.targetDescription !== "string") {
-    return { ok: false, reason: "payload.targetDescription must be a string" };
-  }
-
+function parseCommonTraceContext(payload: Record<string, unknown>): CommonTraceContext {
   return {
-    ok: true,
-    event: {
-      v: CURRENT_MOD_TRACE_VERSION,
-      kind: CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE,
-      sessionId: header.sessionId,
-      seq: header.seq,
-      capturedAtMillis: header.capturedAtMillis,
-      payload: {
-        worldTick: context.value.worldTick,
-        fps: payload.fps,
-        dimensionKey: context.value.dimensionKey,
-        x: payload.x,
-        y: payload.y,
-        z: payload.z,
-        vx: payload.vx,
-        vy: payload.vy,
-        vz: payload.vz,
-        targetDescription: payload.targetDescription
-      }
-    }
+    worldTick: parseIntegerNumber(payload.worldTick, "payload.worldTick must be an integer number"),
+    dimensionKey: parseNonEmptyString(
+      payload.dimensionKey,
+      "payload.dimensionKey must be a non-empty string"
+    )
   };
 }
 
-function decodePlayerLookTargetChangedTraceEvent(
-  header: TraceHeader
-): RawTraceDecodeResult {
-  const payload = header.payload;
-  const context = decodeCommonTraceContext(payload);
+function parseLookTarget(value: unknown, path: string): TraceLookTarget {
+  const target = parseRecord(value, `${path} must be an object`);
+  const kind = parseTraceTargetKind(target.kind, `${path}.kind must be a supported target kind`);
 
-  if (!context.ok) {
-    return context;
+  if (target.targetDescription != null && typeof target.targetDescription !== "string") {
+    fail(`${path}.targetDescription must be a string when present`);
   }
 
-  const target = decodeLookTarget(payload.target, "payload.target");
-
-  if (!target.ok) {
-    return target;
-  }
-
-  return {
-    ok: true,
-    event: {
-      v: CURRENT_MOD_TRACE_VERSION,
-      kind: CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED,
-      sessionId: header.sessionId,
-      seq: header.seq,
-      capturedAtMillis: header.capturedAtMillis,
-      payload: {
-        worldTick: context.value.worldTick,
-        dimensionKey: context.value.dimensionKey,
-        target: target.value
-      }
-    }
-  };
-}
-
-function decodePlayerSelectedSlotChangedTraceEvent(
-  header: TraceHeader
-): RawTraceDecodeResult {
-  const payload = header.payload;
-  const context = decodeCommonTraceContext(payload);
-
-  if (!context.ok) {
-    return context;
-  }
-
-  if (!isIntegerNumber(payload.previousSelectedSlot)) {
-    return { ok: false, reason: "payload.previousSelectedSlot must be an integer number" };
-  }
-
-  if (!isIntegerNumber(payload.selectedSlot)) {
-    return { ok: false, reason: "payload.selectedSlot must be an integer number" };
-  }
-
-  const mainHand = decodeItemStackSnapshot(payload.mainHand, "payload.mainHand");
-
-  if (!mainHand.ok) {
-    return mainHand;
-  }
-
-  const offHand = decodeItemStackSnapshot(payload.offHand, "payload.offHand");
-
-  if (!offHand.ok) {
-    return offHand;
-  }
-
-  return {
-    ok: true,
-    event: {
-      v: CURRENT_MOD_TRACE_VERSION,
-      kind: CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED,
-      sessionId: header.sessionId,
-      seq: header.seq,
-      capturedAtMillis: header.capturedAtMillis,
-      payload: {
-        worldTick: context.value.worldTick,
-        dimensionKey: context.value.dimensionKey,
-        previousSelectedSlot: payload.previousSelectedSlot,
-        selectedSlot: payload.selectedSlot,
-        mainHand: mainHand.value,
-        offHand: offHand.value
-      }
-    }
-  };
-}
-
-function decodePlayerHandStateChangedTraceEvent(
-  header: TraceHeader
-): RawTraceDecodeResult {
-  const payload = header.payload;
-  const context = decodeCommonTraceContext(payload);
-
-  if (!context.ok) {
-    return context;
-  }
-
-  if (!isIntegerNumber(payload.selectedSlot)) {
-    return { ok: false, reason: "payload.selectedSlot must be an integer number" };
-  }
-
-  const mainHand = decodeItemStackSnapshot(payload.mainHand, "payload.mainHand");
-
-  if (!mainHand.ok) {
-    return mainHand;
-  }
-
-  const offHand = decodeItemStackSnapshot(payload.offHand, "payload.offHand");
-
-  if (!offHand.ok) {
-    return offHand;
-  }
-
-  return {
-    ok: true,
-    event: {
-      v: CURRENT_MOD_TRACE_VERSION,
-      kind: CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED,
-      sessionId: header.sessionId,
-      seq: header.seq,
-      capturedAtMillis: header.capturedAtMillis,
-      payload: {
-        worldTick: context.value.worldTick,
-        dimensionKey: context.value.dimensionKey,
-        selectedSlot: payload.selectedSlot,
-        mainHand: mainHand.value,
-        offHand: offHand.value
-      }
-    }
-  };
-}
-
-function decodeInteractionBlockAttackAttemptTraceEvent(
-  header: TraceHeader
-): RawTraceDecodeResult {
-  return decodeInteractionBlockTraceEvent(header, CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT);
-}
-
-function decodeInteractionBlockBreakSuccessTraceEvent(
-  header: TraceHeader
-): RawTraceDecodeResult {
-  return decodeInteractionBlockTraceEvent(header, CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS);
-}
-
-function decodeInteractionBlockTraceEvent(
-  header: TraceHeader,
-  kind:
-    | typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT
-    | typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS
-): RawTraceDecodeResult {
-  const payload = header.payload;
-  const context = decodeCommonTraceContext(payload);
-
-  if (!context.ok) {
-    return context;
-  }
-
-  const block = decodeBlockReference(payload.block, "payload.block");
-
-  if (!block.ok) {
-    return block;
-  }
-
-  if (!isTraceHandType(payload.hand)) {
-    return { ok: false, reason: "payload.hand must be a supported hand type" };
-  }
-
-  if (!isIntegerNumber(payload.selectedSlot)) {
-    return { ok: false, reason: "payload.selectedSlot must be an integer number" };
-  }
-
-  const heldItem = decodeItemStackSnapshot(payload.heldItem, "payload.heldItem");
-
-  if (!heldItem.ok) {
-    return heldItem;
-  }
-
-  return {
-    ok: true,
-    event: {
-      v: CURRENT_MOD_TRACE_VERSION,
-      kind,
-      sessionId: header.sessionId,
-      seq: header.seq,
-      capturedAtMillis: header.capturedAtMillis,
-      payload: {
-        worldTick: context.value.worldTick,
-        dimensionKey: context.value.dimensionKey,
-        block: block.value,
-        hand: payload.hand,
-        selectedSlot: payload.selectedSlot,
-        heldItem: heldItem.value
-      }
-    }
-  };
-}
-
-function decodeInventoryTransactionTraceEvent(
-  header: TraceHeader
-): RawTraceDecodeResult {
-  const payload = header.payload;
-  const context = decodeCommonTraceContext(payload);
-
-  if (!context.ok) {
-    return context;
-  }
-
-  if (typeof payload.containerKind !== "string" || payload.containerKind.length === 0) {
-    return { ok: false, reason: "payload.containerKind must be a non-empty string" };
-  }
-
-  if (typeof payload.source !== "string" || payload.source.length === 0) {
-    return { ok: false, reason: "payload.source must be a non-empty string" };
-  }
-
-  if (!Array.isArray(payload.changedSlots)) {
-    return { ok: false, reason: "payload.changedSlots must be an array" };
-  }
-
-  const changedSlots: TraceInventorySlotDelta[] = [];
-
-  for (let index = 0; index < payload.changedSlots.length; index++) {
-    const changedSlot = decodeInventorySlotDelta(
-      payload.changedSlots[index],
-      `payload.changedSlots[${index}]`
-    );
-
-    if (!changedSlot.ok) {
-      return changedSlot;
-    }
-
-    changedSlots.push(changedSlot.value);
-  }
-
-  return {
-    ok: true,
-    event: {
-      v: CURRENT_MOD_TRACE_VERSION,
-      kind: CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION,
-      sessionId: header.sessionId,
-      seq: header.seq,
-      capturedAtMillis: header.capturedAtMillis,
-      payload: {
-        worldTick: context.value.worldTick,
-        dimensionKey: context.value.dimensionKey,
-        containerKind: payload.containerKind,
-        source: payload.source,
-        changedSlots
-      }
-    }
-  };
-}
-
-function decodeCommonTraceContext(payload: Record<string, unknown>): DecodeValueResult<CommonTraceContext> {
-  if (!isIntegerNumber(payload.worldTick)) {
-    return { ok: false, reason: "payload.worldTick must be an integer number" };
-  }
-
-  if (typeof payload.dimensionKey !== "string" || payload.dimensionKey.length === 0) {
-    return { ok: false, reason: "payload.dimensionKey must be a non-empty string" };
-  }
-
-  return {
-    ok: true,
-    value: {
-      worldTick: payload.worldTick,
-      dimensionKey: payload.dimensionKey
-    }
-  };
-}
-
-function decodeLookTarget(value: unknown, path: string): DecodeValueResult<TraceLookTarget> {
-  if (!isRecord(value)) {
-    return { ok: false, reason: `${path} must be an object` };
-  }
-
-  if (!isTraceTargetKind(value.kind)) {
-    return { ok: false, reason: `${path}.kind must be a supported target kind` };
-  }
-
-  if (value.targetDescription != null && typeof value.targetDescription !== "string") {
-    return { ok: false, reason: `${path}.targetDescription must be a string when present` };
-  }
-
-  const target: TraceLookTarget = {
-    kind: value.kind,
-    ...(typeof value.targetDescription === "string" ? { targetDescription: value.targetDescription } : {})
+  const base: TraceLookTarget = {
+    kind,
+    ...(typeof target.targetDescription === "string"
+      ? {
+          targetDescription: target.targetDescription
+        }
+      : {})
   };
 
-  if (value.kind === "block") {
-    const block = decodeBlockReference(value.block, `${path}.block`);
-
-    if (!block.ok) {
-      return block;
-    }
-
+  if (kind === "block") {
     return {
-      ok: true,
-      value: {
-        ...target,
-        block: block.value
-      }
+      ...base,
+      block: parseBlockReference(target.block, `${path}.block`)
     };
   }
 
-  if (value.kind === "entity") {
-    const entity = decodeLookTargetEntity(value.entity, `${path}.entity`);
-
-    if (!entity.ok) {
-      return entity;
-    }
-
+  if (kind === "entity") {
     return {
-      ok: true,
-      value: {
-        ...target,
-        entity: entity.value
-      }
+      ...base,
+      entity: parseLookTargetEntity(target.entity, `${path}.entity`)
     };
   }
 
+  return base;
+}
+
+function parseLookTargetEntity(value: unknown, path: string): TraceLookTargetEntityDetails {
+  const entity = parseRecord(value, `${path} must be an object`);
+  const entityId = entity.entityId;
+
+  if (entityId != null && !isIntegerNumber(entityId)) {
+    fail(`${path}.entityId must be an integer number when present`);
+  }
+
   return {
-    ok: true,
-    value: target
+    entityTypeId: parseNonEmptyString(
+      entity.entityTypeId,
+      `${path}.entityTypeId must be a non-empty string`
+    ),
+    ...(isIntegerNumber(entityId) ? { entityId } : {})
   };
 }
 
-function decodeLookTargetEntity(
-  value: unknown,
-  path: string
-): DecodeValueResult<TraceLookTargetEntityDetails> {
-  if (!isRecord(value)) {
-    return { ok: false, reason: `${path} must be an object` };
-  }
+function parseBlockReference(value: unknown, path: string): TraceBlockReference {
+  const block = parseRecord(value, `${path} must be an object`);
+  const hitFace = block.hitFace;
 
-  if (typeof value.entityTypeId !== "string" || value.entityTypeId.length === 0) {
-    return { ok: false, reason: `${path}.entityTypeId must be a non-empty string` };
-  }
-
-  if (value.entityId != null && !isIntegerNumber(value.entityId)) {
-    return { ok: false, reason: `${path}.entityId must be an integer number when present` };
+  if (hitFace != null && !isTraceBlockFace(hitFace)) {
+    fail(`${path}.hitFace must be a supported block face when present`);
   }
 
   return {
-    ok: true,
-    value: {
-      entityTypeId: value.entityTypeId,
-      ...(isIntegerNumber(value.entityId) ? { entityId: value.entityId } : {})
-    }
+    blockId: parseNonEmptyString(block.blockId, `${path}.blockId must be a non-empty string`),
+    position: parseBlockPosition(block.position, `${path}.position`),
+    ...(isTraceBlockFace(hitFace) ? { hitFace } : {})
   };
 }
 
-function decodeBlockReference(value: unknown, path: string): DecodeValueResult<TraceBlockReference> {
-  if (!isRecord(value)) {
-    return { ok: false, reason: `${path} must be an object` };
-  }
+function parseBlockPosition(value: unknown, path: string): TraceBlockPosition {
+  const position = parseRecord(value, `${path} must be an object`);
+  const x = position.x;
+  const y = position.y;
+  const z = position.z;
 
-  if (typeof value.blockId !== "string" || value.blockId.length === 0) {
-    return { ok: false, reason: `${path}.blockId must be a non-empty string` };
-  }
-
-  const position = decodeBlockPosition(value.position, `${path}.position`);
-
-  if (!position.ok) {
-    return position;
-  }
-
-  if (value.hitFace != null && !isTraceBlockFace(value.hitFace)) {
-    return { ok: false, reason: `${path}.hitFace must be a supported block face when present` };
+  if (!isIntegerNumber(x) || !isIntegerNumber(y) || !isIntegerNumber(z)) {
+    fail(`${path} coordinates must be integer numbers`);
   }
 
   return {
-    ok: true,
-    value: {
-      blockId: value.blockId,
-      position: position.value,
-      ...(isTraceBlockFace(value.hitFace) ? { hitFace: value.hitFace } : {})
-    }
+    x,
+    y,
+    z
   };
 }
 
-function decodeBlockPosition(value: unknown, path: string): DecodeValueResult<TraceBlockPosition> {
-  if (!isRecord(value)) {
-    return { ok: false, reason: `${path} must be an object` };
-  }
+function parseItemStackSnapshot(value: unknown, path: string): TraceItemStackSnapshot {
+  const item = parseRecord(value, `${path} must be an object`);
 
-  if (!isIntegerNumber(value.x) || !isIntegerNumber(value.y) || !isIntegerNumber(value.z)) {
-    return { ok: false, reason: `${path} coordinates must be integer numbers` };
+  if (item.itemId != null && (typeof item.itemId !== "string" || item.itemId.length === 0)) {
+    fail(`${path}.itemId must be a non-empty string or null`);
   }
 
   return {
-    ok: true,
-    value: {
-      x: value.x,
-      y: value.y,
-      z: value.z
-    }
+    itemId: item.itemId ?? null,
+    count: parseNonNegativeInteger(item.count, `${path}.count must be a non-negative integer`),
+    damage: parseNonNegativeInteger(item.damage, `${path}.damage must be a non-negative integer`),
+    maxDamage: parseNonNegativeInteger(
+      item.maxDamage,
+      `${path}.maxDamage must be a non-negative integer`
+    )
   };
 }
 
-function decodeItemStackSnapshot(
-  value: unknown,
-  path: string
-): DecodeValueResult<TraceItemStackSnapshot> {
-  if (!isRecord(value)) {
-    return { ok: false, reason: `${path} must be an object` };
+function parseInventorySlotDeltaList(value: unknown): readonly TraceInventorySlotDelta[] {
+  if (!Array.isArray(value)) {
+    fail("payload.changedSlots must be an array");
   }
 
-  if (value.itemId != null && (typeof value.itemId !== "string" || value.itemId.length === 0)) {
-    return { ok: false, reason: `${path}.itemId must be a non-empty string or null` };
-  }
+  return value.map((slot, index) => parseInventorySlotDelta(slot, `payload.changedSlots[${index}]`));
+}
 
-  if (!isNonNegativeInteger(value.count)) {
-    return { ok: false, reason: `${path}.count must be a non-negative integer` };
-  }
-
-  if (!isNonNegativeInteger(value.damage)) {
-    return { ok: false, reason: `${path}.damage must be a non-negative integer` };
-  }
-
-  if (!isNonNegativeInteger(value.maxDamage)) {
-    return { ok: false, reason: `${path}.maxDamage must be a non-negative integer` };
-  }
+function parseInventorySlotDelta(value: unknown, path: string): TraceInventorySlotDelta {
+  const slot = parseRecord(value, `${path} must be an object`);
 
   return {
-    ok: true,
-    value: {
-      itemId: value.itemId ?? null,
-      count: value.count,
-      damage: value.damage,
-      maxDamage: value.maxDamage
-    }
+    slot: parseIntegerNumber(slot.slot, `${path}.slot must be an integer number`),
+    previous: parseItemStackSnapshot(slot.previous, `${path}.previous`),
+    current: parseItemStackSnapshot(slot.current, `${path}.current`)
   };
 }
 
-function decodeInventorySlotDelta(
-  value: unknown,
-  path: string
-): DecodeValueResult<TraceInventorySlotDelta> {
+function parseTraceKind(value: unknown): RawTraceKind {
+  if (!isSupportedTraceKind(value)) {
+    fail("unsupported trace kind");
+  }
+
+  return value;
+}
+
+function parseTraceHandType(value: unknown): TraceHandType {
+  if (!isTraceHandType(value)) {
+    fail("payload.hand must be a supported hand type");
+  }
+
+  return value;
+}
+
+function parseTraceTargetKind(value: unknown, reason: string): TraceTargetKind {
+  if (!isTraceTargetKind(value)) {
+    fail(reason);
+  }
+
+  return value;
+}
+
+function parseRecord(value: unknown, reason: string): Record<string, unknown> {
   if (!isRecord(value)) {
-    return { ok: false, reason: `${path} must be an object` };
+    fail(reason);
   }
 
-  if (!isIntegerNumber(value.slot)) {
-    return { ok: false, reason: `${path}.slot must be an integer number` };
+  return value;
+}
+
+function parseString(value: unknown, reason: string): string {
+  if (typeof value !== "string") {
+    fail(reason);
   }
 
-  const previous = decodeItemStackSnapshot(value.previous, `${path}.previous`);
+  return value;
+}
 
-  if (!previous.ok) {
-    return previous;
+function parseNonEmptyString(value: unknown, reason: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    fail(reason);
   }
 
-  const current = decodeItemStackSnapshot(value.current, `${path}.current`);
+  return value;
+}
 
-  if (!current.ok) {
-    return current;
+function parseFiniteNumber(value: unknown, reason: string): number {
+  if (!isFiniteNumber(value)) {
+    fail(reason);
   }
 
-  return {
-    ok: true,
-    value: {
-      slot: value.slot,
-      previous: previous.value,
-      current: current.value
-    }
-  };
+  return value;
+}
+
+function parseIntegerNumber(value: unknown, reason: string): number {
+  if (!isIntegerNumber(value)) {
+    fail(reason);
+  }
+
+  return value;
+}
+
+function parseNonNegativeInteger(value: unknown, reason: string): number {
+  if (!isNonNegativeInteger(value)) {
+    fail(reason);
+  }
+
+  return value;
+}
+
+function fail(reason: string): never {
+  throw new Error(reason);
 }
 
 function isSupportedTraceKind(value: unknown): value is RawTraceKind {

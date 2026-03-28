@@ -23,7 +23,7 @@ import {
 } from "./trace/index.js";
 
 test("decodeCurrentModTraceEvent accepts inventory.transaction", () => {
-  const result = decodeCurrentModTraceEvent({
+  const event = decodeCurrentModTraceEvent({
     v: 1,
     kind: CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION,
     sessionId: "session-a",
@@ -54,13 +54,8 @@ test("decodeCurrentModTraceEvent accepts inventory.transaction", () => {
     }
   });
 
-  assert.equal(result.ok, true);
-  if (!result.ok) {
-    return;
-  }
-
-  assert.equal(result.event.kind, CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION);
-  assert.equal(result.event.payload.changedSlots[0]?.current.itemId, "minecraft:oak_log");
+  assert.equal(event.kind, CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION);
+  assert.equal(event.payload.changedSlots[0]?.current.itemId, "minecraft:oak_log");
 });
 
 test("projection reducers retain wood-facing evidence", () => {

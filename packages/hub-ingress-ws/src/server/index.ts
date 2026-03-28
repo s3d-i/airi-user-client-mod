@@ -157,22 +157,24 @@ export function createHubIngressWsServer(
               return;
             }
 
-            const result = decodeCurrentModTraceEvent(decodedFrame);
+            let event: ReturnType<typeof decodeCurrentModTraceEvent>;
 
-            if (!result.ok) {
-              recordRejection(result.reason, peerId);
+            try {
+              event = decodeCurrentModTraceEvent(decodedFrame);
+            } catch (error) {
+              recordRejection(describeError(error), peerId);
               return;
             }
 
             try {
-              traceSink.acceptTrace(result.event);
+              traceSink.acceptTrace(event);
               acceptedFrames += 1;
               lastAcceptedAt = Date.now();
               logger.debug("accepted ingress frame", {
-                kind: result.event.kind,
+                kind: event.kind,
                 peerId,
-                seq: result.event.seq,
-                sessionId: result.event.sessionId,
+                seq: event.seq,
+                sessionId: event.sessionId,
                 acceptedFrames
               });
             } catch (error) {
