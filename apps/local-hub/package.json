@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc --project tsconfig.build.json",
+    "build": "pnpm --filter @airi-client-mod/local-hub^... build && tsc --project tsconfig.build.json",
     "clean": "rimraf dist",
     "start": "node dist/index.js",
     "typecheck": "tsc --project tsconfig.json"
