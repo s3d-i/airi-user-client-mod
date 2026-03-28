@@ -1,4 +1,4 @@
-export const CURRENT_MOD_TRACE_VERSION = 1 as const;
+export const CURRENT_MOD_TRACE_VERSION = 2 as const;
 export const CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START = "trace.session.start" as const;
 export const CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END = "trace.session.end" as const;
 export const CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE = "player.motion.sample" as const;
