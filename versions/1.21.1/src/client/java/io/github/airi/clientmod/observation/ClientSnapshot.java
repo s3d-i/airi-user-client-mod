@@ -7,11 +7,9 @@ import io.github.airi.clientmod.core.trace.TraceEvent;
 public record ClientSnapshot(
 	long worldTick,
 	String dimensionKey,
-	int fps,
 	Position position,
 	Velocity velocity,
 	TraceEvent.LookTarget lookTarget,
-	String targetDescription,
 	int selectedSlot,
 	TraceEvent.ItemStackSnapshot mainHand,
 	TraceEvent.ItemStackSnapshot offHand,

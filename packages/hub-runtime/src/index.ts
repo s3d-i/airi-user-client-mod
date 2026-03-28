@@ -12,7 +12,8 @@ import {
   type ProjectionSnapshot
 } from "./projection/index.js";
 import {
-  type ObservationSampleTraceEvent,
+  CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE,
+  type PlayerMotionSampleTraceEvent,
   type RawTraceEvent
 } from "./trace/index.js";
 
@@ -40,8 +41,8 @@ export type {
 export type {
   CanonicalTraceEvent,
   CurrentModWireTraceEvent,
-  CurrentModObservationSampleTraceEvent,
-  CurrentModObservationSampleTracePayload,
+  CurrentModPlayerMotionSampleTraceEvent,
+  CurrentModPlayerMotionSampleTracePayload,
   CurrentModSessionEndTraceEvent,
   CurrentModSessionStartTraceEvent,
   CurrentModTraceEvent,
@@ -50,8 +51,8 @@ export type {
   InteractionBlockTracePayload,
   InventoryTransactionTraceEvent,
   InventoryTransactionTracePayload,
-  ObservationSampleTraceEvent,
-  ObservationSampleTracePayload,
+  PlayerMotionSampleTraceEvent,
+  PlayerMotionSampleTracePayload,
   PlayerHandStateChangedTraceEvent,
   PlayerHandStateChangedTracePayload,
   PlayerLookTargetChangedTraceEvent,
@@ -76,7 +77,7 @@ export {
   createRawTraceId,
   CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END,
   CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START,
-  CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE,
+  CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE,
   CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT,
   CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS,
   CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION,
@@ -94,7 +95,7 @@ export interface HubTraceSink {
 
 export interface HubRuntimeSnapshot {
   readonly traceCount: number;
-  readonly latestObservation?: ObservationSampleTraceEvent;
+  readonly latestMotionSample?: PlayerMotionSampleTraceEvent;
   readonly latestTrace?: RawTraceEvent;
   readonly lastAcceptedAt?: number;
   readonly projections: ProjectionSnapshot;
@@ -116,7 +117,7 @@ export interface CreateHubRuntimeOptions {
 export function createHubRuntime(options: CreateHubRuntimeOptions): HubRuntime {
   const { logger } = options;
   let traceCount = 0;
-  let latestObservation: ObservationSampleTraceEvent | undefined;
+  let latestMotionSample: PlayerMotionSampleTraceEvent | undefined;
   let latestTrace: RawTraceEvent | undefined;
   let lastAcceptedAt: number | undefined;
   let projections = createEmptyProjectionSnapshot();
@@ -126,11 +127,11 @@ export function createHubRuntime(options: CreateHubRuntimeOptions): HubRuntime {
   const reset = () => {
     logger.info("reset runtime snapshot", {
       previousTraceCount: traceCount,
-      hadLatestObservation: latestObservation != null,
+      hadLatestMotionSample: latestMotionSample != null,
       hadLatestTrace: latestTrace != null
     });
     traceCount = 0;
-    latestObservation = undefined;
+    latestMotionSample = undefined;
     latestTrace = undefined;
     lastAcceptedAt = undefined;
     projections = createEmptyProjectionSnapshot();
@@ -143,8 +144,8 @@ export function createHubRuntime(options: CreateHubRuntimeOptions): HubRuntime {
       traceCount += 1;
       latestTrace = event;
 
-      if (event.kind === "observation.sample") {
-        latestObservation = event;
+      if (event.kind === CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE) {
+        latestMotionSample = event;
       }
 
       projections = reduceProjectionSnapshot(projections, event);
@@ -169,7 +170,7 @@ export function createHubRuntime(options: CreateHubRuntimeOptions): HubRuntime {
     snapshot() {
       return {
         traceCount,
-        latestObservation,
+        latestMotionSample,
         latestTrace,
         lastAcceptedAt,
         projections,

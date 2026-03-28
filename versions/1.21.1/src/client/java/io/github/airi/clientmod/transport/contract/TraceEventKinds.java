@@ -5,7 +5,7 @@ import java.util.List;
 public final class TraceEventKinds {
 	public static final String SESSION_START = "trace.session.start";
 	public static final String SESSION_END = "trace.session.end";
-	public static final String OBSERVATION_SAMPLE = "observation.sample";
+	public static final String PLAYER_MOTION_SAMPLE = "player.motion.sample";
 	public static final String PLAYER_LOOK_TARGET_CHANGED = "player.look.target.changed";
 	public static final String PLAYER_SELECTED_SLOT_CHANGED = "player.selected_slot.changed";
 	public static final String PLAYER_HAND_STATE_CHANGED = "player.hand_state.changed";
@@ -14,7 +14,7 @@ public final class TraceEventKinds {
 	public static final String INVENTORY_TRANSACTION = "inventory.transaction";
 
 	public static final List<String> CAPABILITY_EVENT_KINDS = List.of(
-		OBSERVATION_SAMPLE,
+		PLAYER_MOTION_SAMPLE,
 		PLAYER_LOOK_TARGET_CHANGED,
 		PLAYER_SELECTED_SLOT_CHANGED,
 		PLAYER_HAND_STATE_CHANGED,

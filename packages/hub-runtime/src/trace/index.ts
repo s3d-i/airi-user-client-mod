@@ -1,7 +1,7 @@
 export const CURRENT_MOD_TRACE_VERSION = 1 as const;
 export const CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START = "trace.session.start" as const;
 export const CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END = "trace.session.end" as const;
-export const CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE = "observation.sample" as const;
+export const CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE = "player.motion.sample" as const;
 export const CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED = "player.look.target.changed" as const;
 export const CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED =
   "player.selected_slot.changed" as const;
@@ -15,7 +15,7 @@ export const CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION = "inventory.transacti
 export type RawTraceKind =
   | typeof CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START
   | typeof CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END
-  | typeof CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE
+  | typeof CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE
   | typeof CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED
   | typeof CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED
   | typeof CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED
@@ -94,9 +94,8 @@ export interface CurrentModSessionEndTraceEvent extends CurrentModWireTraceEvent
   readonly kind: typeof CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END;
 }
 
-export interface CurrentModObservationSampleTracePayload {
+export interface CurrentModPlayerMotionSampleTracePayload {
   readonly worldTick: number;
-  readonly fps: number;
   readonly dimensionKey: string;
   readonly x: number;
   readonly y: number;
@@ -104,12 +103,11 @@ export interface CurrentModObservationSampleTracePayload {
   readonly vx: number;
   readonly vy: number;
   readonly vz: number;
-  readonly targetDescription: string;
 }
 
-export interface CurrentModObservationSampleTraceEvent extends CurrentModWireTraceEventBase {
-  readonly kind: typeof CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE;
-  readonly payload: CurrentModObservationSampleTracePayload;
+export interface CurrentModPlayerMotionSampleTraceEvent extends CurrentModWireTraceEventBase {
+  readonly kind: typeof CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE;
+  readonly payload: CurrentModPlayerMotionSampleTracePayload;
 }
 
 export interface PlayerLookTargetChangedTracePayload {
@@ -185,7 +183,7 @@ export interface InventoryTransactionTraceEvent extends CurrentModWireTraceEvent
 export type CurrentModWireTraceEvent =
   | CurrentModSessionStartTraceEvent
   | CurrentModSessionEndTraceEvent
-  | CurrentModObservationSampleTraceEvent
+  | CurrentModPlayerMotionSampleTraceEvent
   | PlayerLookTargetChangedTraceEvent
   | PlayerSelectedSlotChangedTraceEvent
   | PlayerHandStateChangedTraceEvent
@@ -197,13 +195,13 @@ export type CurrentModTraceEvent = CurrentModWireTraceEvent;
 
 export type SessionStartTraceEvent = CurrentModSessionStartTraceEvent;
 export type SessionEndTraceEvent = CurrentModSessionEndTraceEvent;
-export type ObservationSampleTracePayload = CurrentModObservationSampleTracePayload;
-export type ObservationSampleTraceEvent = CurrentModObservationSampleTraceEvent;
+export type PlayerMotionSampleTracePayload = CurrentModPlayerMotionSampleTracePayload;
+export type PlayerMotionSampleTraceEvent = CurrentModPlayerMotionSampleTraceEvent;
 
 export type CanonicalTraceEvent =
   | SessionStartTraceEvent
   | SessionEndTraceEvent
-  | ObservationSampleTraceEvent
+  | PlayerMotionSampleTraceEvent
   | PlayerLookTargetChangedTraceEvent
   | PlayerSelectedSlotChangedTraceEvent
   | PlayerHandStateChangedTraceEvent
@@ -289,24 +287,19 @@ function decodePayloadTraceEvent(
   const context = parseCommonTraceContext(payload);
 
   switch (kind) {
-    case CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE:
+    case CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE:
       return {
         ...base,
         kind,
         payload: {
           worldTick: context.worldTick,
-          fps: parseIntegerNumber(payload.fps, "payload.fps must be an integer number"),
           dimensionKey: context.dimensionKey,
           x: parseFiniteNumber(payload.x, "payload position values must be finite numbers"),
           y: parseFiniteNumber(payload.y, "payload position values must be finite numbers"),
           z: parseFiniteNumber(payload.z, "payload position values must be finite numbers"),
           vx: parseFiniteNumber(payload.vx, "payload velocity values must be finite numbers"),
           vy: parseFiniteNumber(payload.vy, "payload velocity values must be finite numbers"),
-          vz: parseFiniteNumber(payload.vz, "payload velocity values must be finite numbers"),
-          targetDescription: parseString(
-            payload.targetDescription,
-            "payload.targetDescription must be a string"
-          )
+          vz: parseFiniteNumber(payload.vz, "payload velocity values must be finite numbers")
         }
       };
 
@@ -625,7 +618,7 @@ function isSupportedTraceKind(value: unknown): value is RawTraceKind {
   return (
     value === CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START ||
     value === CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END ||
-    value === CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE ||
+    value === CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE ||
     value === CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED ||
     value === CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED ||
     value === CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED ||

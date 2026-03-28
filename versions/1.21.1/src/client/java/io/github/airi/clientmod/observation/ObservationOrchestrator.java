@@ -85,7 +85,7 @@ public final class ObservationOrchestrator {
 			return;
 		}
 
-		emitter.emit(traceEventFactory.createObservationSample(traceContext, snapshot));
+		emitter.emit(traceEventFactory.createPlayerMotionSample(traceContext, snapshot));
 	}
 
 	public void onAttackBlock(PlayerEntity player, World world, Hand hand, BlockPos pos, Direction direction) {

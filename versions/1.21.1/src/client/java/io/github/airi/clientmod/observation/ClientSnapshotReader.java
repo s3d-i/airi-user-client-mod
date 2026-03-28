@@ -33,11 +33,9 @@ public final class ClientSnapshotReader {
 		return new ClientSnapshot(
 			world.getTime(),
 			world.getRegistryKey().getValue().toString(),
-			client.getCurrentFps(),
 			new ClientSnapshot.Position(position.x, position.y, position.z),
 			new ClientSnapshot.Velocity(velocity.x, velocity.y, velocity.z),
 			lookTarget,
-			describeLookTarget(lookTarget),
 			player.getInventory().selectedSlot,
 			captureItemStack(player.getMainHandStack()),
 			captureItemStack(player.getOffHandStack()),
@@ -103,18 +101,6 @@ public final class ClientSnapshotReader {
 			null,
 			new TraceEvent.LookTargetEntity(entityId, entity.getId())
 		);
-	}
-
-	private static String describeLookTarget(TraceEvent.LookTarget target) {
-		if (target == null) {
-			return "none";
-		}
-
-		if (target.targetDescription() != null && !target.targetDescription().isBlank()) {
-			return target.targetDescription();
-		}
-
-		return target.kind();
 	}
 
 	private List<TraceEvent.ItemStackSnapshot> captureInventorySnapshot(ClientPlayerEntity player) {

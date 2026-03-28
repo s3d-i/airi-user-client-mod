@@ -168,15 +168,15 @@ export function App() {
                   wide={true}
                 />
               </dl>
-              {state.runtime.latestObservation == null ? null : (
+              {state.runtime.latestMotionSample == null ? null : (
                 <div className="sample-card">
                   <div>
                     <span className="sample-card__label">Position</span>
                     <strong>
                       {formatVec3(
-                        state.runtime.latestObservation.payload.x,
-                        state.runtime.latestObservation.payload.y,
-                        state.runtime.latestObservation.payload.z
+                        state.runtime.latestMotionSample.payload.x,
+                        state.runtime.latestMotionSample.payload.y,
+                        state.runtime.latestMotionSample.payload.z
                       )}
                     </strong>
                   </div>
@@ -184,17 +184,16 @@ export function App() {
                     <span className="sample-card__label">Velocity</span>
                     <strong>
                       {formatVec3(
-                        state.runtime.latestObservation.payload.vx,
-                        state.runtime.latestObservation.payload.vy,
-                        state.runtime.latestObservation.payload.vz
+                        state.runtime.latestMotionSample.payload.vx,
+                        state.runtime.latestMotionSample.payload.vy,
+                        state.runtime.latestMotionSample.payload.vz
                       )}
                     </strong>
                   </div>
                   <div>
-                    <span className="sample-card__label">Tick / FPS</span>
+                    <span className="sample-card__label">Tick</span>
                     <strong>
-                      {state.runtime.latestObservation.payload.worldTick} /{" "}
-                      {state.runtime.latestObservation.payload.fps}
+                      {state.runtime.latestMotionSample.payload.worldTick}
                     </strong>
                   </div>
                 </div>
@@ -436,7 +435,7 @@ function describeTraceDetail(event: RawTraceEvent): string {
     case "trace.session.start":
     case "trace.session.end":
       return `session ${event.sessionId}`;
-    case "observation.sample":
+    case "player.motion.sample":
       return formatVec3(event.payload.x, event.payload.y, event.payload.z);
     case "player.look.target.changed":
       return formatTarget(event.payload.target);

@@ -56,7 +56,7 @@ public record SessionStartPayload(
 	}
 
 	public record Sampling(
-		int observationSampleIntervalTicks,
+		int playerMotionSampleIntervalTicks,
 		String inventoryScanMode,
 		int inventoryMaxChangedSlots
 	) {

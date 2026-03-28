@@ -8,9 +8,9 @@ import io.github.airi.clientmod.transport.contract.TraceEventKinds;
 import io.github.airi.clientmod.core.trace.InteractionBlockAttackAttemptTraceEvent;
 import io.github.airi.clientmod.core.trace.InteractionBlockBreakSuccessTraceEvent;
 import io.github.airi.clientmod.core.trace.InventoryTransactionTraceEvent;
-import io.github.airi.clientmod.core.trace.ObservationSample;
 import io.github.airi.clientmod.core.trace.PlayerHandStateChangedTraceEvent;
 import io.github.airi.clientmod.core.trace.PlayerLookTargetChangedTraceEvent;
+import io.github.airi.clientmod.core.trace.PlayerMotionSampleTraceEvent;
 import io.github.airi.clientmod.core.trace.PlayerSelectedSlotChangedTraceEvent;
 import io.github.airi.clientmod.core.trace.TraceEvent;
 
@@ -20,10 +20,10 @@ public final class TraceFrameEncoder {
 	private static final int SESSION_END_WIRE_VERSION = 1;
 
 	public EncodedTraceFrame encodeTraceEvent(String sessionId, TraceEvent event) {
-		if (event instanceof ObservationSample sample) {
+		if (event instanceof PlayerMotionSampleTraceEvent sample) {
 			return new EncodedTraceFrame(
-				TraceEventKinds.OBSERVATION_SAMPLE,
-				serializeObservationSample(sessionId, sample)
+				TraceEventKinds.PLAYER_MOTION_SAMPLE,
+				serializePlayerMotionSample(sessionId, sample)
 			);
 		}
 
@@ -98,18 +98,16 @@ public final class TraceFrameEncoder {
 		return new EncodedTraceFrame(TraceEventKinds.SESSION_END, json.toString());
 	}
 
-	private String serializeObservationSample(String sessionId, ObservationSample sample) {
+	private String serializePlayerMotionSample(String sessionId, PlayerMotionSampleTraceEvent sample) {
 		StringBuilder json = new StringBuilder(320);
-		appendTraceEnvelopeStart(json, sessionId, TraceEventKinds.OBSERVATION_SAMPLE, sample);
+		appendTraceEnvelopeStart(json, sessionId, TraceEventKinds.PLAYER_MOTION_SAMPLE, sample);
 		appendCommonPayloadStart(json, sample);
-		json.append("\"fps\":").append(sample.fps()).append(',');
 		json.append("\"x\":").append(sample.x()).append(',');
 		json.append("\"y\":").append(sample.y()).append(',');
 		json.append("\"z\":").append(sample.z()).append(',');
 		json.append("\"vx\":").append(sample.vx()).append(',');
 		json.append("\"vy\":").append(sample.vy()).append(',');
-		json.append("\"vz\":").append(sample.vz()).append(',');
-		json.append("\"targetDescription\":\"").append(escapeJson(sample.targetDescription())).append('"');
+		json.append("\"vz\":").append(sample.vz());
 		json.append("}}");
 		return json.toString();
 	}
@@ -229,7 +227,7 @@ public final class TraceFrameEncoder {
 		json.append(',');
 
 		json.append("\"sampling\":{");
-		json.append("\"observationSampleIntervalTicks\":").append(sampling.observationSampleIntervalTicks()).append(',');
+		json.append("\"player.motion.sampleIntervalTicks\":").append(sampling.playerMotionSampleIntervalTicks()).append(',');
 		json.append("\"inventoryScanMode\":\"").append(escapeJson(sampling.inventoryScanMode())).append("\",");
 		json.append("\"inventoryMaxChangedSlots\":").append(sampling.inventoryMaxChangedSlots());
 		json.append('}');

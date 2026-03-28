@@ -10,13 +10,13 @@ import { createEmptyProjectionSnapshot, reduceProjectionSnapshot } from "./proje
 import {
   CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS,
   CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION,
-  CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE,
+  CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE,
   CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED,
   CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED,
   decodeCurrentModTraceEvent,
   type InteractionBlockBreakSuccessTraceEvent,
   type InventoryTransactionTraceEvent,
-  type ObservationSampleTraceEvent,
+  type PlayerMotionSampleTraceEvent,
   type PlayerHandStateChangedTraceEvent,
   type PlayerLookTargetChangedTraceEvent,
   type RawTraceEvent
@@ -126,7 +126,7 @@ test("wood gathering detector needs more than weak context alone", () => {
   const weakContextProjection = [
     createLookTargetChangedTraceEvent(1_000, 1_000),
     createHandStateChangedTraceEvent(1_050, 1_001, "minecraft:stone_axe"),
-    createObservationSampleTraceEvent(1_150, 1_002)
+    createPlayerMotionSampleTraceEvent(1_150, 1_002)
   ].reduce(
     (current, event) => reduceProjectionSnapshot(current, event),
     createEmptyProjectionSnapshot()
@@ -161,7 +161,7 @@ test("wood gathering episode opens after sustained support and closes on reset",
     });
   }
 
-  const sustainingObservation = createObservationSampleTraceEvent(3_000, 2_100);
+  const sustainingObservation = createPlayerMotionSampleTraceEvent(3_000, 2_100);
   projection = reduceProjectionSnapshot(projection, sustainingObservation);
   episodeState = stepEpisodeMachine(episodeState, {
     event: sustainingObservation,
@@ -189,35 +189,33 @@ function createWoodTraceSequence(): readonly RawTraceEvent[] {
   return [
     createLookTargetChangedTraceEvent(1_000, 1_000),
     createHandStateChangedTraceEvent(1_050, 1_001, "minecraft:stone_axe"),
-    createObservationSampleTraceEvent(1_100, 1_002),
+    createPlayerMotionSampleTraceEvent(1_100, 1_002),
     createBlockBreakTraceEvent(1_200, 1_003, "minecraft:oak_log"),
     createBlockBreakTraceEvent(1_500, 1_004, "minecraft:oak_log"),
     createInventoryTransactionTraceEvent(1_700, 1_005, "minecraft:oak_log", 2)
   ];
 }
 
-function createObservationSampleTraceEvent(
+function createPlayerMotionSampleTraceEvent(
   capturedAtMillis: number,
   seq: number,
   dimensionKey = "minecraft:overworld"
-): ObservationSampleTraceEvent {
+): PlayerMotionSampleTraceEvent {
   return {
     v: 1,
-    kind: CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE,
+    kind: CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE,
     sessionId: "session-a",
     seq,
     capturedAtMillis,
     payload: {
       worldTick: 300 + seq,
-      fps: 144,
       dimensionKey,
       x: 12,
       y: 64,
       z: 4,
       vx: 0.01,
       vy: 0,
-      vz: 0.01,
-      targetDescription: "block minecraft:oak_log @ 12 64 4"
+      vz: 0.01
     }
   };
 }

@@ -3,9 +3,9 @@ package io.github.airi.clientmod.observation;
 import io.github.airi.clientmod.core.trace.InteractionBlockAttackAttemptTraceEvent;
 import io.github.airi.clientmod.core.trace.InteractionBlockBreakSuccessTraceEvent;
 import io.github.airi.clientmod.core.trace.InventoryTransactionTraceEvent;
-import io.github.airi.clientmod.core.trace.ObservationSample;
 import io.github.airi.clientmod.core.trace.PlayerHandStateChangedTraceEvent;
 import io.github.airi.clientmod.core.trace.PlayerLookTargetChangedTraceEvent;
+import io.github.airi.clientmod.core.trace.PlayerMotionSampleTraceEvent;
 import io.github.airi.clientmod.core.trace.PlayerSelectedSlotChangedTraceEvent;
 import io.github.airi.clientmod.core.trace.TraceEvent;
 import io.github.airi.clientmod.session.WorldSessionTracker;
@@ -15,23 +15,21 @@ public final class TraceEventFactory {
 	private static final String INVENTORY_CONTAINER_KIND = "player_inventory";
 	private static final String INVENTORY_SOURCE = "player_inventory.scan";
 
-	public ObservationSample createObservationSample(
+	public PlayerMotionSampleTraceEvent createPlayerMotionSample(
 		WorldSessionTracker.SampleTraceContext traceContext,
 		ClientSnapshot snapshot
 	) {
-		return new ObservationSample(
+		return new PlayerMotionSampleTraceEvent(
 			traceContext.sequence(),
 			traceContext.capturedAtMillis(),
 			snapshot.worldTick(),
-			snapshot.fps(),
 			snapshot.dimensionKey(),
 			snapshot.position().x(),
 			snapshot.position().y(),
 			snapshot.position().z(),
 			snapshot.velocity().x(),
 			snapshot.velocity().y(),
-			snapshot.velocity().z(),
-			snapshot.targetDescription()
+			snapshot.velocity().z()
 		);
 	}
 
