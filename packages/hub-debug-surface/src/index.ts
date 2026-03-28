@@ -4,7 +4,8 @@ import type { HubIngressWsStatusSnapshot } from "@airi-client-mod/hub-ingress-ws
 import type { HubLogEntry, HubLogger, HubRuntime, ProjectionState } from "@airi-client-mod/hub-runtime";
 import type { HubTraceStore, HubTraceStoreSnapshot, RetainedTraceRecord } from "@airi-client-mod/hub-trace-store";
 
-const DEFAULT_DEBUG_STATE_TRACE_LIMIT = 25;
+const DEFAULT_DEBUG_STATE_TRACE_LIMIT = 100;
+const MAX_DEBUG_STATE_TRACE_LIMIT = 200;
 const DEFAULT_DEBUG_STATE_LOG_LIMIT = 100;
 
 export interface HubLogStoreSnapshot {
@@ -75,7 +76,7 @@ export function createHubDebugSurfaceServer(
   const activeFeedClients = new Set<CloseDebugFeedClient>();
 
   const buildState = (query: HubDebugSurfaceStateQuery = {}): HubDebugState => {
-    const traceLimit = query.traceLimit ?? DEFAULT_DEBUG_STATE_TRACE_LIMIT;
+    const traceLimit = clampTraceLimit(query.traceLimit ?? DEFAULT_DEBUG_STATE_TRACE_LIMIT);
     const logLimit = query.logLimit ?? DEFAULT_DEBUG_STATE_LOG_LIMIT;
 
     return {
@@ -160,6 +161,14 @@ function normalizeOptions(options: HubDebugSurfaceServerOptions): HubDebugSurfac
     apiBasePath,
     feedIntervalMillis: options.feedIntervalMillis
   };
+}
+
+function clampTraceLimit(limit: number): number {
+  if (limit > MAX_DEBUG_STATE_TRACE_LIMIT) {
+    return MAX_DEBUG_STATE_TRACE_LIMIT;
+  }
+
+  return limit;
 }
 
 function createBoundAddress(

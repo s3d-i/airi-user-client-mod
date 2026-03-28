@@ -35,7 +35,7 @@ export const DEFAULT_LOCAL_HUB_DEBUG_SURFACE_OPTIONS = {
   host: "127.0.0.1",
   port: 8788,
   apiBasePath: "/api/debug",
-  feedIntervalMillis: 1000
+  feedIntervalMillis: 500
 } satisfies HubDebugSurfaceServerOptions;
 
 export interface LocalHubAppOptions {
