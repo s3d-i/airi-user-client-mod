@@ -27,10 +27,21 @@ dependencies {
 	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
-	clientImplementation platform("io.opentelemetry:opentelemetry-bom:1.60.1")
+	def otelVersion = "1.60.1"
+	clientImplementation platform("io.opentelemetry:opentelemetry-bom:${otelVersion}")
 	clientImplementation "io.opentelemetry:opentelemetry-api"
 	clientImplementation "io.opentelemetry:opentelemetry-sdk"
+	clientImplementation "io.opentelemetry:opentelemetry-sdk-metrics"
 	clientImplementation "io.opentelemetry:opentelemetry-exporter-logging"
+
+	// Bundle OTel runtime jars so standalone launches can resolve telemetry classes.
+	// FIXME: Shouldn't include in client release
+	include "io.opentelemetry:opentelemetry-context:${otelVersion}"
+	include "io.opentelemetry:opentelemetry-api:${otelVersion}"
+	include "io.opentelemetry:opentelemetry-sdk-common:${otelVersion}"
+	include "io.opentelemetry:opentelemetry-sdk-metrics:${otelVersion}"
+	include "io.opentelemetry:opentelemetry-sdk:${otelVersion}"
+	include "io.opentelemetry:opentelemetry-exporter-logging:${otelVersion}"
 }
 
 def clientRuntimeSystemProperties = [

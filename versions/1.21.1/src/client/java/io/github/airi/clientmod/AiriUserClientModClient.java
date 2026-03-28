@@ -34,7 +34,15 @@ public final class AiriUserClientModClient implements ClientModInitializer {
 
 	@Override
 	public void onInitializeClient() {
-		TransportTelemetry transportTelemetry = OtelBootstrap.init();
+		TransportTelemetry transportTelemetry = TransportTelemetry.NOOP;
+		try {
+			transportTelemetry = OtelBootstrap.init();
+		} catch (LinkageError | RuntimeException exception) {
+			AiriUserClientMod.LOGGER.warn(
+				"OpenTelemetry bootstrap unavailable; continuing with telemetry noop fallback",
+				exception
+			);
+		}
 		worldSessionTracker = new WorldSessionTracker();
 		websocketSink = new WebSocketObservationSink(
 			TRANSPORT_STATUS_STORE,
