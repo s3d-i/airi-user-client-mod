@@ -29,3 +29,17 @@ Use `./gradlew runClient` only when you explicitly need in-game runtime behavior
 - checking the local debug surface and Vite UI against live traces
 
 Agents should not execute manual runtime validations
+
+## Coding style
+
+Prefer minimal changes each step instead of batch/massive rewrite.
+
+## Extra notive
+
+You're in a refactor, rewriting mc client side trace event and canonical raw trace.
+
+Neglect all docs under docs/
+
+Do not add docs either
+
+Mutate the contract according to user prompt, and change all related shapes, run typecheck and compile check after changes.
