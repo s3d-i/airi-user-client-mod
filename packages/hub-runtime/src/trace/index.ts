@@ -37,7 +37,7 @@ export type RawTraceKind =
 
 export type TraceBlockFace = "up" | "down" | "north" | "south" | "east" | "west";
 export type TraceTargetKind = "none" | "miss" | "block" | "entity";
-export type TraceHandType = "main_hand" | "off_hand";
+export type TraceHandType = "main_hand" | "off_hand" | "unknown";
 
 export interface TraceBlockPosition {
   readonly x: number;
@@ -740,7 +740,7 @@ function isTraceTargetKind(value: unknown): value is TraceTargetKind {
 }
 
 function isTraceHandType(value: unknown): value is TraceHandType {
-  return value === "main_hand" || value === "off_hand";
+  return value === "main_hand" || value === "off_hand" || value === "unknown";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -3,8 +3,10 @@ package io.github.airi.clientmod.observation;
 import io.github.airi.clientmod.core.trace.ObservationEmitter;
 import io.github.airi.clientmod.core.trace.TraceEvent;
 import io.github.airi.clientmod.session.WorldSessionTracker;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 import net.minecraft.block.BlockState;
@@ -60,6 +62,7 @@ public final class ObservationOrchestrator {
 		this.snapshotReader = snapshotReader;
 		this.inputInteractionCaptureStage = new InputInteractionCaptureStage(snapshotReader, traceEventFactory);
 		this.blockBreakCaptureStage = new BlockBreakCaptureStage(snapshotReader, traceEventFactory);
+		// Capture stage list order is the canonical flush order for raw evidence emission.
 		this.captureStages = List.of(
 			new ChangedStateCaptureStage(
 				lookTargetChangeDetector,
@@ -74,6 +77,8 @@ public final class ObservationOrchestrator {
 		);
 	}
 
+	// Temporary compatibility ctor for call sites that still pass the removed matcher dependency.
+	@Deprecated(forRemoval = true)
 	ObservationOrchestrator(
 		ObservationEmitter emitter,
 		WorldSessionTracker worldSessionTracker,
@@ -107,24 +112,25 @@ public final class ObservationOrchestrator {
 
 		ClientSnapshot snapshot = snapshotReader.read(client);
 		DraftCollector draftCollector = new DraftCollector();
-		for (CaptureStage stage : captureStages) {
-			stage.collect(snapshot, draftCollector);
+		for (int stageOrdinal = 0; stageOrdinal < captureStages.size(); stageOrdinal++) {
+			draftCollector.beginStage(stageOrdinal);
+			captureStages.get(stageOrdinal).collect(snapshot, draftCollector);
 		}
 
-		List<DraftEvent> drafts = draftCollector.sorted();
+		List<DraftEvent> drafts = draftCollector.ordered();
 		if (drafts.isEmpty()) {
 			return;
 		}
 
-		List<WorldSessionTracker.SampleTraceContext> traceContexts = new ArrayList<>(drafts.size());
-		for (int i = 0; i < drafts.size(); i++) {
-			WorldSessionTracker.SampleTraceContext traceContext = worldSessionTracker.beginTrace();
-			if (traceContext == null) {
-				return;
-			}
-			traceContexts.add(traceContext);
+		List<WorldSessionTracker.SampleTraceContext> traceContexts = worldSessionTracker.beginTraces(drafts.size());
+		if (traceContexts == null) {
+			// Retry policy: no commits run, so buffered callback signals remain pending for the next flush attempt.
+			return;
 		}
 
+		// `seq` is canonical flush order (stage ordinal + stage-local signal order), not global callback arrival order.
+		// Failure policy: commit actions only run after a full flush; a mid-batch emit failure may duplicate already
+		// emitted events on retry.
 		for (int i = 0; i < drafts.size(); i++) {
 			emitter.emit(drafts.get(i).materialize(traceContexts.get(i)));
 		}
@@ -219,26 +225,19 @@ public final class ObservationOrchestrator {
 		void reset();
 	}
 
-	private enum StageOrder {
-		// Fixed ordering is intentional to keep raw evidence replay deterministic:
-		// changed state transitions -> input attempts -> block break interactions -> inventory delta -> periodic samples.
-		CHANGED_STATE,
-		INPUT_INTERACTION,
-		BLOCK_BREAK,
-		INVENTORY_DELTA,
-		PERIODIC_SAMPLE
-	}
-
 	private interface DraftMaterializer {
 		TraceEvent materialize(WorldSessionTracker.SampleTraceContext traceContext);
 	}
 
-	private record DraftEvent(
-		StageOrder stageOrder,
-		long insertionOrder,
-		DraftMaterializer materializer,
-		Runnable commitAction
+	private record DraftOrder(
+		int stageOrdinal,
+		long stageSignalOrder,
+		long sourceWorldTick,
+		long insertionOrder
 	) {
+	}
+
+	private record DraftEvent(DraftOrder order, DraftMaterializer materializer, Runnable commitAction) {
 		TraceEvent materialize(WorldSessionTracker.SampleTraceContext traceContext) {
 			return materializer.materialize(traceContext);
 		}
@@ -254,28 +253,50 @@ public final class ObservationOrchestrator {
 
 		private final List<DraftEvent> drafts = new ArrayList<>();
 		private final List<Runnable> additionalCommits = new ArrayList<>();
+		private int currentStageOrdinal = -1;
 		private long nextInsertionOrder;
 
-		void add(StageOrder stageOrder, DraftMaterializer materializer) {
-			add(stageOrder, materializer, NOOP);
+		void beginStage(int stageOrdinal) {
+			currentStageOrdinal = stageOrdinal;
 		}
 
-		void add(StageOrder stageOrder, DraftMaterializer materializer, Runnable commitAction) {
-			drafts.add(new DraftEvent(stageOrder, nextInsertionOrder++, materializer, commitAction));
+		void add(long stageSignalOrder, long sourceWorldTick, DraftMaterializer materializer) {
+			add(stageSignalOrder, sourceWorldTick, materializer, NOOP);
+		}
+
+		void add(
+			long stageSignalOrder,
+			long sourceWorldTick,
+			DraftMaterializer materializer,
+			Runnable commitAction
+		) {
+			if (currentStageOrdinal < 0) {
+				throw new IllegalStateException("DraftCollector stage ordinal is not initialized");
+			}
+
+			drafts.add(
+				new DraftEvent(
+					new DraftOrder(currentStageOrdinal, stageSignalOrder, sourceWorldTick, nextInsertionOrder++),
+					materializer,
+					commitAction
+				)
+			);
 		}
 
 		void addCommit(Runnable commitAction) {
 			additionalCommits.add(commitAction);
 		}
 
-		List<DraftEvent> sorted() {
-			List<DraftEvent> sorted = new ArrayList<>(drafts);
-			sorted.sort(
+		List<DraftEvent> ordered() {
+			List<DraftEvent> ordered = new ArrayList<>(drafts);
+			ordered.sort(
 				Comparator
-					.comparing((DraftEvent draft) -> draft.stageOrder().ordinal())
-					.thenComparing(DraftEvent::insertionOrder)
+					.comparingInt((DraftEvent draft) -> draft.order().stageOrdinal())
+					.thenComparingLong(draft -> draft.order().stageSignalOrder())
+					.thenComparingLong(draft -> draft.order().sourceWorldTick())
+					.thenComparingLong(draft -> draft.order().insertionOrder())
 			);
-			return sorted;
+			return ordered;
 		}
 
 		void commit(List<DraftEvent> orderedDrafts) {
@@ -308,10 +329,12 @@ public final class ObservationOrchestrator {
 
 		@Override
 		public void collect(ClientSnapshot snapshot, DraftCollector collector) {
+			long nextStageSignalOrder = 0L;
 			LookTargetChangeDetector.LookTargetChangeDraft lookTargetDraft = lookTargetChangeDetector.detect(snapshot);
 			if (lookTargetDraft != null) {
 				collector.add(
-					StageOrder.CHANGED_STATE,
+					nextStageSignalOrder++,
+					snapshot.worldTick(),
 					traceContext -> traceEventFactory.createLookTargetChanged(traceContext, snapshot, lookTargetDraft),
 					() -> lookTargetChangeDetector.commit(lookTargetDraft)
 				);
@@ -320,7 +343,8 @@ public final class ObservationOrchestrator {
 			SelectedSlotChangeDetector.SelectedSlotChangeDraft selectedSlotDraft = selectedSlotChangeDetector.detect(snapshot);
 			if (selectedSlotDraft != null) {
 				collector.add(
-					StageOrder.CHANGED_STATE,
+					nextStageSignalOrder++,
+					snapshot.worldTick(),
 					traceContext -> traceEventFactory.createSelectedSlotChanged(traceContext, snapshot, selectedSlotDraft),
 					() -> selectedSlotChangeDetector.commit(selectedSlotDraft)
 				);
@@ -329,7 +353,8 @@ public final class ObservationOrchestrator {
 			HandStateChangeDetector.HandStateChangeDraft handStateDraft = handStateChangeDetector.detect(snapshot);
 			if (handStateDraft != null) {
 				collector.add(
-					StageOrder.CHANGED_STATE,
+					nextStageSignalOrder++,
+					snapshot.worldTick(),
 					traceContext -> traceEventFactory.createHandStateChanged(traceContext, snapshot, handStateDraft),
 					() -> handStateChangeDetector.commit(handStateDraft)
 				);
@@ -350,7 +375,10 @@ public final class ObservationOrchestrator {
 
 		private final ClientSnapshotReader snapshotReader;
 		private final TraceEventFactory traceEventFactory;
-		private final List<InputInteractionSignal> pendingSignals = new ArrayList<>();
+		private final List<ItemUseAttemptSignal> pendingItemUseSignals = new ArrayList<>();
+		private final List<BlockUseAttemptSignal> pendingBlockUseSignals = new ArrayList<>();
+		private final List<EntityUseAttemptSignal> pendingEntityUseSignals = new ArrayList<>();
+		private final List<EntityAttackAttemptSignal> pendingEntityAttackSignals = new ArrayList<>();
 		private long nextSignalOrder = 1L;
 
 		InputInteractionCaptureStage(ClientSnapshotReader snapshotReader, TraceEventFactory traceEventFactory) {
@@ -360,7 +388,8 @@ public final class ObservationOrchestrator {
 
 		void recordItemUseAttempt(PlayerEntity player, World world, Hand hand) {
 			String handKey = toHandKey(hand);
-			pendingSignals.add(
+			// selectedSlot/heldItem are callback-time action context, not flush-time snapshot state.
+			pendingItemUseSignals.add(
 				new ItemUseAttemptSignal(
 					nextSignalOrder++,
 					world.getRegistryKey().getValue().toString(),
@@ -375,7 +404,8 @@ public final class ObservationOrchestrator {
 		void recordBlockUseAttempt(PlayerEntity player, World world, Hand hand, BlockHitResult hitResult) {
 			BlockPos immutablePos = hitResult.getBlockPos().toImmutable();
 			String handKey = toHandKey(hand);
-			pendingSignals.add(
+			// selectedSlot/heldItem are callback-time action context, not flush-time snapshot state.
+			pendingBlockUseSignals.add(
 				new BlockUseAttemptSignal(
 					nextSignalOrder++,
 					world.getRegistryKey().getValue().toString(),
@@ -398,7 +428,8 @@ public final class ObservationOrchestrator {
 			EntityHitResult ignoredHitResult
 		) {
 			String handKey = toHandKey(hand);
-			pendingSignals.add(
+			// selectedSlot/heldItem are callback-time action context, not flush-time snapshot state.
+			pendingEntityUseSignals.add(
 				new EntityUseAttemptSignal(
 					nextSignalOrder++,
 					world.getRegistryKey().getValue().toString(),
@@ -419,7 +450,8 @@ public final class ObservationOrchestrator {
 			EntityHitResult ignoredHitResult
 		) {
 			String handKey = toHandKey(hand);
-			pendingSignals.add(
+			// selectedSlot/heldItem are callback-time action context, not flush-time snapshot state.
+			pendingEntityAttackSignals.add(
 				new EntityAttackAttemptSignal(
 					nextSignalOrder++,
 					world.getRegistryKey().getValue().toString(),
@@ -434,17 +466,27 @@ public final class ObservationOrchestrator {
 
 		@Override
 		public void collect(ClientSnapshot snapshot, DraftCollector collector) {
-			if (pendingSignals.isEmpty()) {
+			if (hasNoPendingSignals()) {
 				return;
 			}
 
-			List<InputInteractionSignal> orderedSignals = new ArrayList<>(pendingSignals);
+			List<InputInteractionSignal> orderedSignals = new ArrayList<>(
+				pendingItemUseSignals.size() +
+				pendingBlockUseSignals.size() +
+				pendingEntityUseSignals.size() +
+				pendingEntityAttackSignals.size()
+			);
+			orderedSignals.addAll(pendingItemUseSignals);
+			orderedSignals.addAll(pendingBlockUseSignals);
+			orderedSignals.addAll(pendingEntityUseSignals);
+			orderedSignals.addAll(pendingEntityAttackSignals);
 			orderedSignals.sort(Comparator.comparingLong(InputInteractionSignal::signalOrder));
 
 			for (InputInteractionSignal signal : orderedSignals) {
 				if (signal instanceof ItemUseAttemptSignal itemUseAttemptSignal) {
 					collector.add(
-						StageOrder.INPUT_INTERACTION,
+						itemUseAttemptSignal.signalOrder(),
+						itemUseAttemptSignal.worldTick(),
 						traceContext -> traceEventFactory.createItemUseAttempt(
 							traceContext,
 							itemUseAttemptSignal.worldTick(),
@@ -459,7 +501,8 @@ public final class ObservationOrchestrator {
 
 				if (signal instanceof BlockUseAttemptSignal blockUseAttemptSignal) {
 					collector.add(
-						StageOrder.INPUT_INTERACTION,
+						blockUseAttemptSignal.signalOrder(),
+						blockUseAttemptSignal.worldTick(),
 						traceContext -> traceEventFactory.createBlockUseAttempt(
 							traceContext,
 							blockUseAttemptSignal.worldTick(),
@@ -477,7 +520,8 @@ public final class ObservationOrchestrator {
 
 				if (signal instanceof EntityUseAttemptSignal entityUseAttemptSignal) {
 					collector.add(
-						StageOrder.INPUT_INTERACTION,
+						entityUseAttemptSignal.signalOrder(),
+						entityUseAttemptSignal.worldTick(),
 						traceContext -> traceEventFactory.createEntityUseAttempt(
 							traceContext,
 							entityUseAttemptSignal.worldTick(),
@@ -493,7 +537,8 @@ public final class ObservationOrchestrator {
 
 				EntityAttackAttemptSignal entityAttackAttemptSignal = (EntityAttackAttemptSignal) signal;
 				collector.add(
-					StageOrder.INPUT_INTERACTION,
+					entityAttackAttemptSignal.signalOrder(),
+					entityAttackAttemptSignal.worldTick(),
 					traceContext -> traceEventFactory.createEntityAttackAttempt(
 						traceContext,
 						entityAttackAttemptSignal.worldTick(),
@@ -506,13 +551,27 @@ public final class ObservationOrchestrator {
 				);
 			}
 
-			collector.addCommit(() -> pendingSignals.clear());
+			collector.addCommit(this::clearPendingSignals);
 		}
 
 		@Override
 		public void reset() {
-			pendingSignals.clear();
+			clearPendingSignals();
 			nextSignalOrder = 1L;
+		}
+
+		private boolean hasNoPendingSignals() {
+			return pendingItemUseSignals.isEmpty() &&
+				pendingBlockUseSignals.isEmpty() &&
+				pendingEntityUseSignals.isEmpty() &&
+				pendingEntityAttackSignals.isEmpty();
+		}
+
+		private void clearPendingSignals() {
+			pendingItemUseSignals.clear();
+			pendingBlockUseSignals.clear();
+			pendingEntityUseSignals.clear();
+			pendingEntityAttackSignals.clear();
 		}
 
 		private TraceEvent.ItemStackSnapshot captureHeldItem(PlayerEntity player, Hand hand) {
@@ -534,6 +593,8 @@ public final class ObservationOrchestrator {
 
 		private interface InputInteractionSignal {
 			long signalOrder();
+
+			long worldTick();
 		}
 
 		private record ItemUseAttemptSignal(
@@ -602,7 +663,8 @@ public final class ObservationOrchestrator {
 			}
 
 			collector.add(
-				StageOrder.INVENTORY_DELTA,
+				0L,
+				snapshot.worldTick(),
 				traceContext -> traceEventFactory.createInventoryTransaction(traceContext, snapshot, inventoryDeltaDraft),
 				() -> inventoryDeltaDetector.commit(inventoryDeltaDraft)
 			);
@@ -630,7 +692,8 @@ public final class ObservationOrchestrator {
 			}
 
 			collector.add(
-				StageOrder.PERIODIC_SAMPLE,
+				0L,
+				snapshot.worldTick(),
 				traceContext -> traceEventFactory.createPlayerMotionSample(traceContext, snapshot)
 			);
 		}
@@ -643,12 +706,15 @@ public final class ObservationOrchestrator {
 
 	private static final class BlockBreakCaptureStage implements CaptureStage {
 		private static final String MAIN_HAND_KEY = "main_hand";
+		private static final String UNKNOWN_HAND_KEY = "unknown";
+		private static final long MATCH_WINDOW_TICKS = 5L;
+		private static final int MAX_PENDING_ATTEMPTS = 16;
 
 		private final ClientSnapshotReader snapshotReader;
 		private final TraceEventFactory traceEventFactory;
 		private final List<BlockBreakSignal> pendingSignals = new ArrayList<>();
+		private final ArrayDeque<BlockBreakPendingAttempt> pendingAttempts = new ArrayDeque<>();
 
-		private BlockBreakPendingAttempt pendingAttempt;
 		private long nextSignalOrder = 1L;
 
 		BlockBreakCaptureStage(ClientSnapshotReader snapshotReader, TraceEventFactory traceEventFactory) {
@@ -658,6 +724,7 @@ public final class ObservationOrchestrator {
 
 		void recordAttempt(PlayerEntity player, World world, Hand hand, BlockPos pos, Direction direction) {
 			BlockPos immutablePos = pos.toImmutable();
+			// selectedSlot/heldItem are callback-time action context, not flush-time snapshot state.
 			pendingSignals.add(
 				new BlockBreakAttemptSignal(
 					nextSignalOrder++,
@@ -674,6 +741,7 @@ public final class ObservationOrchestrator {
 		}
 
 		void recordOutcome(ClientWorld world, ClientPlayerEntity player, BlockPos pos, BlockState state) {
+			// selectedSlot/heldItem are callback-time action context, not flush-time snapshot state.
 			pendingSignals.add(
 				new BlockBreakOutcomeSignal(
 					nextSignalOrder++,
@@ -696,18 +764,24 @@ public final class ObservationOrchestrator {
 			List<BlockBreakSignal> orderedSignals = new ArrayList<>(pendingSignals);
 			orderedSignals.sort(Comparator.comparingLong(BlockBreakSignal::signalOrder));
 
-			BlockBreakPendingAttempt nextPendingAttempt = pendingAttempt;
+			ArrayDeque<BlockBreakPendingAttempt> nextPendingAttempts = new ArrayDeque<>(pendingAttempts);
 			for (BlockBreakSignal signal : orderedSignals) {
 				if (signal instanceof BlockBreakAttemptSignal attemptSignal) {
-					nextPendingAttempt = new BlockBreakPendingAttempt(
-						attemptSignal.dimensionKey(),
-						attemptSignal.worldTick(),
-						attemptSignal.pos(),
-						attemptSignal.hitFace(),
-						attemptSignal.hand()
+					expireStaleAttempts(nextPendingAttempts, attemptSignal.dimensionKey(), attemptSignal.worldTick());
+					appendPendingAttempt(
+						nextPendingAttempts,
+						new BlockBreakPendingAttempt(
+							attemptSignal.dimensionKey(),
+							attemptSignal.worldTick(),
+							attemptSignal.pos(),
+							attemptSignal.hitFace(),
+							attemptSignal.hand()
+						)
 					);
+
 					collector.add(
-						StageOrder.BLOCK_BREAK,
+						attemptSignal.signalOrder(),
+						attemptSignal.worldTick(),
 						traceContext -> traceEventFactory.createBlockAttackAttempt(
 							traceContext,
 							attemptSignal.worldTick(),
@@ -724,11 +798,12 @@ public final class ObservationOrchestrator {
 				}
 
 				BlockBreakOutcomeSignal outcomeSignal = (BlockBreakOutcomeSignal) signal;
-				BlockBreakOutcomeMatchResult matchResult = matchOutcome(nextPendingAttempt, outcomeSignal);
-				nextPendingAttempt = matchResult.nextPendingAttempt();
+				expireStaleAttempts(nextPendingAttempts, outcomeSignal.dimensionKey(), outcomeSignal.worldTick());
+				BlockBreakOutcomeMatchResult matchResult = matchOutcome(nextPendingAttempts, outcomeSignal);
 
 				collector.add(
-					StageOrder.BLOCK_BREAK,
+					outcomeSignal.signalOrder(),
+					outcomeSignal.worldTick(),
 					traceContext -> traceEventFactory.createBlockBreakSuccess(
 						traceContext,
 						outcomeSignal.worldTick(),
@@ -743,45 +818,80 @@ public final class ObservationOrchestrator {
 				);
 			}
 
-			BlockBreakPendingAttempt committedPendingAttempt = nextPendingAttempt;
 			collector.addCommit(() -> {
-				pendingAttempt = committedPendingAttempt;
+				pendingAttempts.clear();
+				pendingAttempts.addAll(nextPendingAttempts);
 				pendingSignals.clear();
 			});
 		}
 
 		@Override
 		public void reset() {
-			pendingAttempt = null;
+			pendingAttempts.clear();
 			pendingSignals.clear();
 			nextSignalOrder = 1L;
 		}
 
 		private static BlockBreakOutcomeMatchResult matchOutcome(
-			BlockBreakPendingAttempt pendingAttempt,
+			ArrayDeque<BlockBreakPendingAttempt> pendingAttempts,
 			BlockBreakOutcomeSignal successCandidate
 		) {
-			if (pendingAttempt == null) {
-				return new BlockBreakOutcomeMatchResult(null, MAIN_HAND_KEY, null);
-			}
+			Iterator<BlockBreakPendingAttempt> descendingIterator = pendingAttempts.descendingIterator();
+			while (descendingIterator.hasNext()) {
+				BlockBreakPendingAttempt pendingAttempt = descendingIterator.next();
+				if (!Objects.equals(pendingAttempt.dimensionKey(), successCandidate.dimensionKey())) {
+					continue;
+				}
 
-			if (!Objects.equals(pendingAttempt.dimensionKey(), successCandidate.dimensionKey())) {
-				return new BlockBreakOutcomeMatchResult(null, MAIN_HAND_KEY, null);
-			}
+				long tickDelta = successCandidate.worldTick() - pendingAttempt.worldTick();
+				if (tickDelta < 0L || tickDelta > MATCH_WINDOW_TICKS) {
+					continue;
+				}
 
-			if (successCandidate.worldTick() - pendingAttempt.worldTick() > 5L) {
-				return new BlockBreakOutcomeMatchResult(null, MAIN_HAND_KEY, null);
-			}
+				if (!pendingAttempt.pos().equals(successCandidate.pos())) {
+					continue;
+				}
 
-			if (!pendingAttempt.pos().equals(successCandidate.pos())) {
-				return new BlockBreakOutcomeMatchResult(null, MAIN_HAND_KEY, pendingAttempt);
+				descendingIterator.remove();
+				return new BlockBreakOutcomeMatchResult(
+					pendingAttempt.hitFace(),
+					pendingAttempt.hand(),
+					BlockBreakMatchStatus.MATCHED
+				);
 			}
 
 			return new BlockBreakOutcomeMatchResult(
-				pendingAttempt.hitFace(),
-				pendingAttempt.hand(),
-				null
+				null,
+				UNKNOWN_HAND_KEY,
+				BlockBreakMatchStatus.UNMATCHED
 			);
+		}
+
+		private static void expireStaleAttempts(
+			ArrayDeque<BlockBreakPendingAttempt> pendingAttempts,
+			String dimensionKey,
+			long referenceWorldTick
+		) {
+			for (Iterator<BlockBreakPendingAttempt> iterator = pendingAttempts.iterator(); iterator.hasNext();) {
+				BlockBreakPendingAttempt pendingAttempt = iterator.next();
+				if (!Objects.equals(pendingAttempt.dimensionKey(), dimensionKey)) {
+					continue;
+				}
+
+				if (referenceWorldTick - pendingAttempt.worldTick() > MATCH_WINDOW_TICKS) {
+					iterator.remove();
+				}
+			}
+		}
+
+		private static void appendPendingAttempt(
+			ArrayDeque<BlockBreakPendingAttempt> pendingAttempts,
+			BlockBreakPendingAttempt nextPendingAttempt
+		) {
+			pendingAttempts.addLast(nextPendingAttempt);
+			while (pendingAttempts.size() > MAX_PENDING_ATTEMPTS) {
+				pendingAttempts.removeFirst();
+			}
 		}
 
 		private interface BlockBreakSignal {
@@ -833,8 +943,13 @@ public final class ObservationOrchestrator {
 		private record BlockBreakOutcomeMatchResult(
 			String hitFace,
 			String hand,
-			BlockBreakPendingAttempt nextPendingAttempt
+			BlockBreakMatchStatus status
 		) {
+		}
+
+		private enum BlockBreakMatchStatus {
+			MATCHED,
+			UNMATCHED
 		}
 	}
 }
