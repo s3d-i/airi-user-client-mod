@@ -1,7 +1,12 @@
 package io.github.airi.clientmod.observation;
 
 import io.github.airi.clientmod.core.trace.ObservationEmitter;
+import io.github.airi.clientmod.core.trace.TraceEvent;
 import io.github.airi.clientmod.session.WorldSessionTracker;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Objects;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
@@ -14,16 +19,12 @@ import net.minecraft.util.math.Direction;
 import net.minecraft.world.World;
 
 public final class ObservationOrchestrator {
+	// TODO: Rename this class/file to CaptureCoordinator once external references are updated.
 	private final ObservationEmitter emitter;
 	private final WorldSessionTracker worldSessionTracker;
 	private final ClientSnapshotReader snapshotReader;
-	private final PeriodicMotionSampler periodicMotionSampler;
-	private final LookTargetChangeDetector lookTargetChangeDetector;
-	private final SelectedSlotChangeDetector selectedSlotChangeDetector;
-	private final HandStateChangeDetector handStateChangeDetector;
-	private final InventoryDeltaDetector inventoryDeltaDetector;
-	private final BlockBreakInteractionMatcher blockBreakInteractionMatcher;
-	private final TraceEventFactory traceEventFactory;
+	private final List<CaptureStage> captureStages;
+	private final BlockBreakCaptureStage blockBreakCaptureStage;
 
 	public ObservationOrchestrator(ObservationEmitter emitter, WorldSessionTracker worldSessionTracker) {
 		this(
@@ -35,7 +36,6 @@ public final class ObservationOrchestrator {
 			new SelectedSlotChangeDetector(),
 			new HandStateChangeDetector(),
 			new InventoryDeltaDetector(),
-			new BlockBreakInteractionMatcher(),
 			new TraceEventFactory()
 		);
 	}
@@ -49,19 +49,48 @@ public final class ObservationOrchestrator {
 		SelectedSlotChangeDetector selectedSlotChangeDetector,
 		HandStateChangeDetector handStateChangeDetector,
 		InventoryDeltaDetector inventoryDeltaDetector,
-		BlockBreakInteractionMatcher blockBreakInteractionMatcher,
 		TraceEventFactory traceEventFactory
 	) {
 		this.emitter = emitter;
 		this.worldSessionTracker = worldSessionTracker;
 		this.snapshotReader = snapshotReader;
-		this.periodicMotionSampler = periodicMotionSampler;
-		this.lookTargetChangeDetector = lookTargetChangeDetector;
-		this.selectedSlotChangeDetector = selectedSlotChangeDetector;
-		this.handStateChangeDetector = handStateChangeDetector;
-		this.inventoryDeltaDetector = inventoryDeltaDetector;
-		this.blockBreakInteractionMatcher = blockBreakInteractionMatcher;
-		this.traceEventFactory = traceEventFactory;
+		this.blockBreakCaptureStage = new BlockBreakCaptureStage(snapshotReader, traceEventFactory);
+		this.captureStages = List.of(
+			new ChangedStateCaptureStage(
+				lookTargetChangeDetector,
+				selectedSlotChangeDetector,
+				handStateChangeDetector,
+				traceEventFactory
+			),
+			blockBreakCaptureStage,
+			new InventoryDeltaCaptureStage(inventoryDeltaDetector, traceEventFactory),
+			new PeriodicSampleCaptureStage(periodicMotionSampler, traceEventFactory)
+		);
+	}
+
+	ObservationOrchestrator(
+		ObservationEmitter emitter,
+		WorldSessionTracker worldSessionTracker,
+		ClientSnapshotReader snapshotReader,
+		PeriodicMotionSampler periodicMotionSampler,
+		LookTargetChangeDetector lookTargetChangeDetector,
+		SelectedSlotChangeDetector selectedSlotChangeDetector,
+		HandStateChangeDetector handStateChangeDetector,
+		InventoryDeltaDetector inventoryDeltaDetector,
+		BlockBreakInteractionMatcher ignoredBlockBreakInteractionMatcher,
+		TraceEventFactory traceEventFactory
+	) {
+		this(
+			emitter,
+			worldSessionTracker,
+			snapshotReader,
+			periodicMotionSampler,
+			lookTargetChangeDetector,
+			selectedSlotChangeDetector,
+			handStateChangeDetector,
+			inventoryDeltaDetector,
+			traceEventFactory
+		);
 	}
 
 	public void onEndClientTick(MinecraftClient client) {
@@ -71,156 +100,443 @@ public final class ObservationOrchestrator {
 		}
 
 		ClientSnapshot snapshot = snapshotReader.read(client);
-		emitLookTargetChangeIfNeeded(snapshot);
-		emitSelectedSlotChangeIfNeeded(snapshot);
-		emitHandStateChangeIfNeeded(snapshot);
-		emitInventoryDeltaIfNeeded(snapshot);
+		DraftCollector draftCollector = new DraftCollector();
+		for (CaptureStage stage : captureStages) {
+			stage.collect(snapshot, draftCollector);
+		}
 
-		if (!periodicMotionSampler.shouldEmitThisTick()) {
+		List<DraftEvent> drafts = draftCollector.sorted();
+		if (drafts.isEmpty()) {
 			return;
 		}
 
-		WorldSessionTracker.SampleTraceContext traceContext = worldSessionTracker.beginTrace();
-		if (traceContext == null) {
-			return;
+		List<WorldSessionTracker.SampleTraceContext> traceContexts = new ArrayList<>(drafts.size());
+		for (int i = 0; i < drafts.size(); i++) {
+			WorldSessionTracker.SampleTraceContext traceContext = worldSessionTracker.beginTrace();
+			if (traceContext == null) {
+				return;
+			}
+			traceContexts.add(traceContext);
 		}
 
-		emitter.emit(traceEventFactory.createPlayerMotionSample(traceContext, snapshot));
+		for (int i = 0; i < drafts.size(); i++) {
+			emitter.emit(drafts.get(i).materialize(traceContexts.get(i)));
+		}
+		draftCollector.commit(drafts);
 	}
 
 	public void onAttackBlock(PlayerEntity player, World world, Hand hand, BlockPos pos, Direction direction) {
-		if (!world.isClient() || !worldSessionTracker.hasActiveSession()) {
+		if (
+			player == null ||
+			world == null ||
+			pos == null ||
+			!world.isClient() ||
+			!worldSessionTracker.hasActiveSession()
+		) {
 			return;
 		}
 
-		String dimensionKey = world.getRegistryKey().getValue().toString();
-		String hitFace = direction == null ? null : direction.asString();
-		String handKey = hand == Hand.OFF_HAND ? "off_hand" : "main_hand";
-		long worldTick = world.getTime();
-		BlockPos immutablePos = pos.toImmutable();
-
-		blockBreakInteractionMatcher.registerAttempt(
-			new BlockBreakInteractionMatcher.BlockBreakAttempt(
-				dimensionKey,
-				worldTick,
-				immutablePos,
-				hitFace,
-				handKey
-			)
-		);
-
-		WorldSessionTracker.SampleTraceContext traceContext = worldSessionTracker.beginTrace();
-		if (traceContext == null) {
-			return;
-		}
-
-		String blockId = Registries.BLOCK.getId(world.getBlockState(immutablePos).getBlock()).toString();
-		emitter.emit(traceEventFactory.createBlockAttackAttempt(
-			traceContext,
-			worldTick,
-			dimensionKey,
-			blockId,
-			immutablePos,
-			hitFace,
-			handKey,
-			player.getInventory().selectedSlot,
-			snapshotReader.captureItemStack(player.getMainHandStack())
-		));
+		// Callback handlers only record raw interaction signals.
+		// Emission is centralized in onEndClientTick for deterministic ordering and context allocation.
+		blockBreakCaptureStage.recordAttempt(player, world, hand, pos, direction);
 	}
 
 	public void onAfterClientBlockBreak(ClientWorld world, ClientPlayerEntity player, BlockPos pos, BlockState state) {
-		WorldSessionTracker.SampleTraceContext traceContext = worldSessionTracker.beginTrace();
-		if (traceContext == null) {
+		if (world == null || player == null || pos == null || state == null || !worldSessionTracker.hasActiveSession()) {
 			return;
 		}
 
-		String dimensionKey = world.getRegistryKey().getValue().toString();
-		long worldTick = world.getTime();
-		BlockBreakInteractionMatcher.BlockBreakMatchResult match = blockBreakInteractionMatcher.matchSuccess(
-			new BlockBreakInteractionMatcher.BlockBreakSuccessCandidate(dimensionKey, worldTick, pos)
-		);
-
-		String hitFace = match == null ? null : match.hitFace();
-		String hand = match == null ? "main_hand" : match.hand();
-		emitter.emit(traceEventFactory.createBlockBreakSuccess(
-			traceContext,
-			worldTick,
-			dimensionKey,
-			Registries.BLOCK.getId(state.getBlock()).toString(),
-			pos,
-			hitFace,
-			hand,
-			player.getInventory().selectedSlot,
-			snapshotReader.captureItemStack(player.getMainHandStack())
-		));
-	}
-
-	private void emitLookTargetChangeIfNeeded(ClientSnapshot snapshot) {
-		LookTargetChangeDetector.LookTargetChangeDraft draft = lookTargetChangeDetector.detect(snapshot);
-		if (draft == null) {
-			return;
-		}
-
-		WorldSessionTracker.SampleTraceContext traceContext = worldSessionTracker.beginTrace();
-		if (traceContext == null) {
-			return;
-		}
-
-		lookTargetChangeDetector.commit(draft);
-		emitter.emit(traceEventFactory.createLookTargetChanged(traceContext, snapshot, draft));
-	}
-
-	private void emitSelectedSlotChangeIfNeeded(ClientSnapshot snapshot) {
-		SelectedSlotChangeDetector.SelectedSlotChangeDraft draft = selectedSlotChangeDetector.detect(snapshot);
-		if (draft == null) {
-			return;
-		}
-
-		WorldSessionTracker.SampleTraceContext traceContext = worldSessionTracker.beginTrace();
-		if (traceContext == null) {
-			return;
-		}
-
-		emitter.emit(traceEventFactory.createSelectedSlotChanged(traceContext, snapshot, draft));
-		selectedSlotChangeDetector.commit(draft);
-	}
-
-	private void emitHandStateChangeIfNeeded(ClientSnapshot snapshot) {
-		HandStateChangeDetector.HandStateChangeDraft draft = handStateChangeDetector.detect(snapshot);
-		if (draft == null) {
-			return;
-		}
-
-		WorldSessionTracker.SampleTraceContext traceContext = worldSessionTracker.beginTrace();
-		if (traceContext == null) {
-			return;
-		}
-
-		emitter.emit(traceEventFactory.createHandStateChanged(traceContext, snapshot, draft));
-		handStateChangeDetector.commit(draft);
-	}
-
-	private void emitInventoryDeltaIfNeeded(ClientSnapshot snapshot) {
-		InventoryDeltaDetector.InventoryDeltaDraft draft = inventoryDeltaDetector.detect(snapshot);
-		if (draft == null) {
-			return;
-		}
-
-		WorldSessionTracker.SampleTraceContext traceContext = worldSessionTracker.beginTrace();
-		if (traceContext == null) {
-			return;
-		}
-
-		inventoryDeltaDetector.commit(draft);
-		emitter.emit(traceEventFactory.createInventoryTransaction(traceContext, snapshot, draft));
+		// Block break signals are buffered so attempt/outcome matching and emission are resolved during tick flush.
+		// This keeps ordering deterministic across all capture stages and avoids callback-time context allocation.
+		blockBreakCaptureStage.recordOutcome(world, player, pos, state);
 	}
 
 	private void resetTransientState() {
-		periodicMotionSampler.reset();
-		lookTargetChangeDetector.reset();
-		selectedSlotChangeDetector.reset();
-		handStateChangeDetector.reset();
-		inventoryDeltaDetector.reset();
-		blockBreakInteractionMatcher.reset();
+		for (CaptureStage stage : captureStages) {
+			stage.reset();
+		}
+	}
+
+	private interface CaptureStage {
+		void collect(ClientSnapshot snapshot, DraftCollector collector);
+
+		void reset();
+	}
+
+	private enum StageOrder {
+		// Fixed ordering is intentional to keep raw evidence replay deterministic:
+		// changed state transitions -> block break interactions -> inventory delta -> periodic samples.
+		CHANGED_STATE,
+		BLOCK_BREAK,
+		INVENTORY_DELTA,
+		PERIODIC_SAMPLE
+	}
+
+	private interface DraftMaterializer {
+		TraceEvent materialize(WorldSessionTracker.SampleTraceContext traceContext);
+	}
+
+	private record DraftEvent(
+		StageOrder stageOrder,
+		long insertionOrder,
+		DraftMaterializer materializer,
+		Runnable commitAction
+	) {
+		TraceEvent materialize(WorldSessionTracker.SampleTraceContext traceContext) {
+			return materializer.materialize(traceContext);
+		}
+
+		void commit() {
+			commitAction.run();
+		}
+	}
+
+	private static final class DraftCollector {
+		private static final Runnable NOOP = () -> {
+		};
+
+		private final List<DraftEvent> drafts = new ArrayList<>();
+		private final List<Runnable> additionalCommits = new ArrayList<>();
+		private long nextInsertionOrder;
+
+		void add(StageOrder stageOrder, DraftMaterializer materializer) {
+			add(stageOrder, materializer, NOOP);
+		}
+
+		void add(StageOrder stageOrder, DraftMaterializer materializer, Runnable commitAction) {
+			drafts.add(new DraftEvent(stageOrder, nextInsertionOrder++, materializer, commitAction));
+		}
+
+		void addCommit(Runnable commitAction) {
+			additionalCommits.add(commitAction);
+		}
+
+		List<DraftEvent> sorted() {
+			List<DraftEvent> sorted = new ArrayList<>(drafts);
+			sorted.sort(
+				Comparator
+					.comparing((DraftEvent draft) -> draft.stageOrder().ordinal())
+					.thenComparing(DraftEvent::insertionOrder)
+			);
+			return sorted;
+		}
+
+		void commit(List<DraftEvent> orderedDrafts) {
+			for (DraftEvent draft : orderedDrafts) {
+				draft.commit();
+			}
+			for (Runnable additionalCommit : additionalCommits) {
+				additionalCommit.run();
+			}
+		}
+	}
+
+	private static final class ChangedStateCaptureStage implements CaptureStage {
+		private final LookTargetChangeDetector lookTargetChangeDetector;
+		private final SelectedSlotChangeDetector selectedSlotChangeDetector;
+		private final HandStateChangeDetector handStateChangeDetector;
+		private final TraceEventFactory traceEventFactory;
+
+		ChangedStateCaptureStage(
+			LookTargetChangeDetector lookTargetChangeDetector,
+			SelectedSlotChangeDetector selectedSlotChangeDetector,
+			HandStateChangeDetector handStateChangeDetector,
+			TraceEventFactory traceEventFactory
+		) {
+			this.lookTargetChangeDetector = lookTargetChangeDetector;
+			this.selectedSlotChangeDetector = selectedSlotChangeDetector;
+			this.handStateChangeDetector = handStateChangeDetector;
+			this.traceEventFactory = traceEventFactory;
+		}
+
+		@Override
+		public void collect(ClientSnapshot snapshot, DraftCollector collector) {
+			LookTargetChangeDetector.LookTargetChangeDraft lookTargetDraft = lookTargetChangeDetector.detect(snapshot);
+			if (lookTargetDraft != null) {
+				collector.add(
+					StageOrder.CHANGED_STATE,
+					traceContext -> traceEventFactory.createLookTargetChanged(traceContext, snapshot, lookTargetDraft),
+					() -> lookTargetChangeDetector.commit(lookTargetDraft)
+				);
+			}
+
+			SelectedSlotChangeDetector.SelectedSlotChangeDraft selectedSlotDraft = selectedSlotChangeDetector.detect(snapshot);
+			if (selectedSlotDraft != null) {
+				collector.add(
+					StageOrder.CHANGED_STATE,
+					traceContext -> traceEventFactory.createSelectedSlotChanged(traceContext, snapshot, selectedSlotDraft),
+					() -> selectedSlotChangeDetector.commit(selectedSlotDraft)
+				);
+			}
+
+			HandStateChangeDetector.HandStateChangeDraft handStateDraft = handStateChangeDetector.detect(snapshot);
+			if (handStateDraft != null) {
+				collector.add(
+					StageOrder.CHANGED_STATE,
+					traceContext -> traceEventFactory.createHandStateChanged(traceContext, snapshot, handStateDraft),
+					() -> handStateChangeDetector.commit(handStateDraft)
+				);
+			}
+		}
+
+		@Override
+		public void reset() {
+			lookTargetChangeDetector.reset();
+			selectedSlotChangeDetector.reset();
+			handStateChangeDetector.reset();
+		}
+	}
+
+	private static final class InventoryDeltaCaptureStage implements CaptureStage {
+		private final InventoryDeltaDetector inventoryDeltaDetector;
+		private final TraceEventFactory traceEventFactory;
+
+		InventoryDeltaCaptureStage(InventoryDeltaDetector inventoryDeltaDetector, TraceEventFactory traceEventFactory) {
+			this.inventoryDeltaDetector = inventoryDeltaDetector;
+			this.traceEventFactory = traceEventFactory;
+		}
+
+		@Override
+		public void collect(ClientSnapshot snapshot, DraftCollector collector) {
+			InventoryDeltaDetector.InventoryDeltaDraft inventoryDeltaDraft = inventoryDeltaDetector.detect(snapshot);
+			if (inventoryDeltaDraft == null) {
+				return;
+			}
+
+			collector.add(
+				StageOrder.INVENTORY_DELTA,
+				traceContext -> traceEventFactory.createInventoryTransaction(traceContext, snapshot, inventoryDeltaDraft),
+				() -> inventoryDeltaDetector.commit(inventoryDeltaDraft)
+			);
+		}
+
+		@Override
+		public void reset() {
+			inventoryDeltaDetector.reset();
+		}
+	}
+
+	private static final class PeriodicSampleCaptureStage implements CaptureStage {
+		private final PeriodicMotionSampler periodicMotionSampler;
+		private final TraceEventFactory traceEventFactory;
+
+		PeriodicSampleCaptureStage(PeriodicMotionSampler periodicMotionSampler, TraceEventFactory traceEventFactory) {
+			this.periodicMotionSampler = periodicMotionSampler;
+			this.traceEventFactory = traceEventFactory;
+		}
+
+		@Override
+		public void collect(ClientSnapshot snapshot, DraftCollector collector) {
+			if (!periodicMotionSampler.shouldEmitThisTick()) {
+				return;
+			}
+
+			collector.add(
+				StageOrder.PERIODIC_SAMPLE,
+				traceContext -> traceEventFactory.createPlayerMotionSample(traceContext, snapshot)
+			);
+		}
+
+		@Override
+		public void reset() {
+			periodicMotionSampler.reset();
+		}
+	}
+
+	private static final class BlockBreakCaptureStage implements CaptureStage {
+		private static final String MAIN_HAND_KEY = "main_hand";
+
+		private final ClientSnapshotReader snapshotReader;
+		private final TraceEventFactory traceEventFactory;
+		private final List<BlockBreakSignal> pendingSignals = new ArrayList<>();
+
+		private BlockBreakPendingAttempt pendingAttempt;
+		private long nextSignalOrder = 1L;
+
+		BlockBreakCaptureStage(ClientSnapshotReader snapshotReader, TraceEventFactory traceEventFactory) {
+			this.snapshotReader = snapshotReader;
+			this.traceEventFactory = traceEventFactory;
+		}
+
+		void recordAttempt(PlayerEntity player, World world, Hand hand, BlockPos pos, Direction direction) {
+			BlockPos immutablePos = pos.toImmutable();
+			pendingSignals.add(
+				new BlockBreakAttemptSignal(
+					nextSignalOrder++,
+					world.getRegistryKey().getValue().toString(),
+					world.getTime(),
+					immutablePos,
+					Registries.BLOCK.getId(world.getBlockState(immutablePos).getBlock()).toString(),
+					direction == null ? null : direction.asString(),
+					hand == Hand.OFF_HAND ? "off_hand" : MAIN_HAND_KEY,
+					player.getInventory().selectedSlot,
+					snapshotReader.captureItemStack(player.getMainHandStack())
+				)
+			);
+		}
+
+		void recordOutcome(ClientWorld world, ClientPlayerEntity player, BlockPos pos, BlockState state) {
+			pendingSignals.add(
+				new BlockBreakOutcomeSignal(
+					nextSignalOrder++,
+					world.getRegistryKey().getValue().toString(),
+					world.getTime(),
+					pos.toImmutable(),
+					Registries.BLOCK.getId(state.getBlock()).toString(),
+					player.getInventory().selectedSlot,
+					snapshotReader.captureItemStack(player.getMainHandStack())
+				)
+			);
+		}
+
+		@Override
+		public void collect(ClientSnapshot snapshot, DraftCollector collector) {
+			if (pendingSignals.isEmpty()) {
+				return;
+			}
+
+			List<BlockBreakSignal> orderedSignals = new ArrayList<>(pendingSignals);
+			orderedSignals.sort(Comparator.comparingLong(BlockBreakSignal::signalOrder));
+
+			BlockBreakPendingAttempt nextPendingAttempt = pendingAttempt;
+			for (BlockBreakSignal signal : orderedSignals) {
+				if (signal instanceof BlockBreakAttemptSignal attemptSignal) {
+					nextPendingAttempt = new BlockBreakPendingAttempt(
+						attemptSignal.dimensionKey(),
+						attemptSignal.worldTick(),
+						attemptSignal.pos(),
+						attemptSignal.hitFace(),
+						attemptSignal.hand()
+					);
+					collector.add(
+						StageOrder.BLOCK_BREAK,
+						traceContext -> traceEventFactory.createBlockAttackAttempt(
+							traceContext,
+							attemptSignal.worldTick(),
+							attemptSignal.dimensionKey(),
+							attemptSignal.blockId(),
+							attemptSignal.pos(),
+							attemptSignal.hitFace(),
+							attemptSignal.hand(),
+							attemptSignal.selectedSlot(),
+							attemptSignal.heldItem()
+						)
+					);
+					continue;
+				}
+
+				BlockBreakOutcomeSignal outcomeSignal = (BlockBreakOutcomeSignal) signal;
+				BlockBreakOutcomeMatchResult matchResult = matchOutcome(nextPendingAttempt, outcomeSignal);
+				nextPendingAttempt = matchResult.nextPendingAttempt();
+
+				collector.add(
+					StageOrder.BLOCK_BREAK,
+					traceContext -> traceEventFactory.createBlockBreakSuccess(
+						traceContext,
+						outcomeSignal.worldTick(),
+						outcomeSignal.dimensionKey(),
+						outcomeSignal.blockId(),
+						outcomeSignal.pos(),
+						matchResult.hitFace(),
+						matchResult.hand(),
+						outcomeSignal.selectedSlot(),
+						outcomeSignal.heldItem()
+					)
+				);
+			}
+
+			BlockBreakPendingAttempt committedPendingAttempt = nextPendingAttempt;
+			collector.addCommit(() -> {
+				pendingAttempt = committedPendingAttempt;
+				pendingSignals.clear();
+			});
+		}
+
+		@Override
+		public void reset() {
+			pendingAttempt = null;
+			pendingSignals.clear();
+			nextSignalOrder = 1L;
+		}
+
+		private static BlockBreakOutcomeMatchResult matchOutcome(
+			BlockBreakPendingAttempt pendingAttempt,
+			BlockBreakOutcomeSignal successCandidate
+		) {
+			if (pendingAttempt == null) {
+				return new BlockBreakOutcomeMatchResult(null, MAIN_HAND_KEY, null);
+			}
+
+			if (!Objects.equals(pendingAttempt.dimensionKey(), successCandidate.dimensionKey())) {
+				return new BlockBreakOutcomeMatchResult(null, MAIN_HAND_KEY, null);
+			}
+
+			if (successCandidate.worldTick() - pendingAttempt.worldTick() > 5L) {
+				return new BlockBreakOutcomeMatchResult(null, MAIN_HAND_KEY, null);
+			}
+
+			if (!pendingAttempt.pos().equals(successCandidate.pos())) {
+				return new BlockBreakOutcomeMatchResult(null, MAIN_HAND_KEY, pendingAttempt);
+			}
+
+			return new BlockBreakOutcomeMatchResult(
+				pendingAttempt.hitFace(),
+				pendingAttempt.hand(),
+				null
+			);
+		}
+
+		private interface BlockBreakSignal {
+			long signalOrder();
+		}
+
+		private record BlockBreakAttemptSignal(
+			long signalOrder,
+			String dimensionKey,
+			long worldTick,
+			BlockPos pos,
+			String blockId,
+			String hitFace,
+			String hand,
+			int selectedSlot,
+			TraceEvent.ItemStackSnapshot heldItem
+		) implements BlockBreakSignal {
+			private BlockBreakAttemptSignal {
+				pos = pos.toImmutable();
+			}
+		}
+
+		private record BlockBreakOutcomeSignal(
+			long signalOrder,
+			String dimensionKey,
+			long worldTick,
+			BlockPos pos,
+			String blockId,
+			int selectedSlot,
+			TraceEvent.ItemStackSnapshot heldItem
+		) implements BlockBreakSignal {
+			private BlockBreakOutcomeSignal {
+				pos = pos.toImmutable();
+			}
+		}
+
+		private record BlockBreakPendingAttempt(
+			String dimensionKey,
+			long worldTick,
+			BlockPos pos,
+			String hitFace,
+			String hand
+		) {
+			private BlockBreakPendingAttempt {
+				pos = pos.toImmutable();
+			}
+		}
+
+		private record BlockBreakOutcomeMatchResult(
+			String hitFace,
+			String hand,
+			BlockBreakPendingAttempt nextPendingAttempt
+		) {
+		}
 	}
 }
