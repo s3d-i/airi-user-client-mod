@@ -1,6 +1,17 @@
 package io.github.airi.clientmod.core.trace;
 
-public sealed interface TraceEvent permits PlayerMotionSampleTraceEvent, PlayerLookTargetChangedTraceEvent, PlayerSelectedSlotChangedTraceEvent, PlayerHandStateChangedTraceEvent, InteractionBlockAttackAttemptTraceEvent, InteractionBlockBreakSuccessTraceEvent, InventoryTransactionTraceEvent {
+public sealed interface TraceEvent permits
+	PlayerMotionSampleTraceEvent,
+	PlayerLookTargetChangedTraceEvent,
+	PlayerSelectedSlotChangedTraceEvent,
+	PlayerHandStateChangedTraceEvent,
+	InteractionBlockAttackAttemptTraceEvent,
+	InteractionBlockUseAttemptTraceEvent,
+	InteractionBlockBreakSuccessTraceEvent,
+	InteractionItemUseAttemptTraceEvent,
+	InteractionEntityUseAttemptTraceEvent,
+	InteractionEntityAttackAttemptTraceEvent,
+	InventoryTransactionTraceEvent {
 	long sequence();
 
 	long capturedAtMillis();

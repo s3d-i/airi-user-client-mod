@@ -6,6 +6,14 @@ export const CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED = "player.look.ta
 export const CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED =
   "player.selected_slot.changed" as const;
 export const CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED = "player.hand_state.changed" as const;
+export const CURRENT_MOD_TRACE_KIND_INTERACTION_ITEM_USE_ATTEMPT =
+  "interaction.item.use.attempt" as const;
+export const CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_USE_ATTEMPT =
+  "interaction.block.use.attempt" as const;
+export const CURRENT_MOD_TRACE_KIND_INTERACTION_ENTITY_USE_ATTEMPT =
+  "interaction.entity.use.attempt" as const;
+export const CURRENT_MOD_TRACE_KIND_INTERACTION_ENTITY_ATTACK_ATTEMPT =
+  "interaction.entity.attack.attempt" as const;
 export const CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT =
   "interaction.block.attack.attempt" as const;
 export const CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS =
@@ -19,6 +27,10 @@ export type RawTraceKind =
   | typeof CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED
   | typeof CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED
   | typeof CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED
+  | typeof CURRENT_MOD_TRACE_KIND_INTERACTION_ITEM_USE_ATTEMPT
+  | typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_USE_ATTEMPT
+  | typeof CURRENT_MOD_TRACE_KIND_INTERACTION_ENTITY_USE_ATTEMPT
+  | typeof CURRENT_MOD_TRACE_KIND_INTERACTION_ENTITY_ATTACK_ATTEMPT
   | typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT
   | typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS
   | typeof CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION;
@@ -157,6 +169,43 @@ export interface InteractionBlockTracePayload {
   readonly heldItem: TraceItemStackSnapshot;
 }
 
+export interface InteractionItemTracePayload {
+  readonly worldTick: number;
+  readonly dimensionKey: string;
+  readonly hand: TraceHandType;
+  readonly selectedSlot: number;
+  readonly heldItem: TraceItemStackSnapshot;
+}
+
+export interface InteractionEntityTracePayload {
+  readonly worldTick: number;
+  readonly dimensionKey: string;
+  readonly entity: TraceLookTargetEntityDetails;
+  readonly hand: TraceHandType;
+  readonly selectedSlot: number;
+  readonly heldItem: TraceItemStackSnapshot;
+}
+
+export interface InteractionItemUseAttemptTraceEvent extends CurrentModWireTraceEventBase {
+  readonly kind: typeof CURRENT_MOD_TRACE_KIND_INTERACTION_ITEM_USE_ATTEMPT;
+  readonly payload: InteractionItemTracePayload;
+}
+
+export interface InteractionBlockUseAttemptTraceEvent extends CurrentModWireTraceEventBase {
+  readonly kind: typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_USE_ATTEMPT;
+  readonly payload: InteractionBlockTracePayload;
+}
+
+export interface InteractionEntityUseAttemptTraceEvent extends CurrentModWireTraceEventBase {
+  readonly kind: typeof CURRENT_MOD_TRACE_KIND_INTERACTION_ENTITY_USE_ATTEMPT;
+  readonly payload: InteractionEntityTracePayload;
+}
+
+export interface InteractionEntityAttackAttemptTraceEvent extends CurrentModWireTraceEventBase {
+  readonly kind: typeof CURRENT_MOD_TRACE_KIND_INTERACTION_ENTITY_ATTACK_ATTEMPT;
+  readonly payload: InteractionEntityTracePayload;
+}
+
 export interface InteractionBlockAttackAttemptTraceEvent extends CurrentModWireTraceEventBase {
   readonly kind: typeof CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT;
   readonly payload: InteractionBlockTracePayload;
@@ -187,6 +236,10 @@ export type CurrentModWireTraceEvent =
   | PlayerLookTargetChangedTraceEvent
   | PlayerSelectedSlotChangedTraceEvent
   | PlayerHandStateChangedTraceEvent
+  | InteractionItemUseAttemptTraceEvent
+  | InteractionBlockUseAttemptTraceEvent
+  | InteractionEntityUseAttemptTraceEvent
+  | InteractionEntityAttackAttemptTraceEvent
   | InteractionBlockAttackAttemptTraceEvent
   | InteractionBlockBreakSuccessTraceEvent
   | InventoryTransactionTraceEvent;
@@ -205,6 +258,10 @@ export type CanonicalTraceEvent =
   | PlayerLookTargetChangedTraceEvent
   | PlayerSelectedSlotChangedTraceEvent
   | PlayerHandStateChangedTraceEvent
+  | InteractionItemUseAttemptTraceEvent
+  | InteractionBlockUseAttemptTraceEvent
+  | InteractionEntityUseAttemptTraceEvent
+  | InteractionEntityAttackAttemptTraceEvent
   | InteractionBlockAttackAttemptTraceEvent
   | InteractionBlockBreakSuccessTraceEvent
   | InventoryTransactionTraceEvent;
@@ -350,6 +407,23 @@ function decodePayloadTraceEvent(
         }
       };
 
+    case CURRENT_MOD_TRACE_KIND_INTERACTION_ITEM_USE_ATTEMPT:
+      return {
+        ...base,
+        kind,
+        payload: {
+          worldTick: context.worldTick,
+          dimensionKey: context.dimensionKey,
+          hand: parseTraceHandType(payload.hand),
+          selectedSlot: parseIntegerNumber(
+            payload.selectedSlot,
+            "payload.selectedSlot must be an integer number"
+          ),
+          heldItem: parseItemStackSnapshot(payload.heldItem, "payload.heldItem")
+        }
+      };
+
+    case CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_USE_ATTEMPT:
     case CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT:
     case CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS:
       return {
@@ -359,6 +433,24 @@ function decodePayloadTraceEvent(
           worldTick: context.worldTick,
           dimensionKey: context.dimensionKey,
           block: parseBlockReference(payload.block, "payload.block"),
+          hand: parseTraceHandType(payload.hand),
+          selectedSlot: parseIntegerNumber(
+            payload.selectedSlot,
+            "payload.selectedSlot must be an integer number"
+          ),
+          heldItem: parseItemStackSnapshot(payload.heldItem, "payload.heldItem")
+        }
+      };
+
+    case CURRENT_MOD_TRACE_KIND_INTERACTION_ENTITY_USE_ATTEMPT:
+    case CURRENT_MOD_TRACE_KIND_INTERACTION_ENTITY_ATTACK_ATTEMPT:
+      return {
+        ...base,
+        kind,
+        payload: {
+          worldTick: context.worldTick,
+          dimensionKey: context.dimensionKey,
+          entity: parseLookTargetEntity(payload.entity, "payload.entity"),
           hand: parseTraceHandType(payload.hand),
           selectedSlot: parseIntegerNumber(
             payload.selectedSlot,
@@ -622,6 +714,10 @@ function isSupportedTraceKind(value: unknown): value is RawTraceKind {
     value === CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED ||
     value === CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED ||
     value === CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED ||
+    value === CURRENT_MOD_TRACE_KIND_INTERACTION_ITEM_USE_ATTEMPT ||
+    value === CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_USE_ATTEMPT ||
+    value === CURRENT_MOD_TRACE_KIND_INTERACTION_ENTITY_USE_ATTEMPT ||
+    value === CURRENT_MOD_TRACE_KIND_INTERACTION_ENTITY_ATTACK_ATTEMPT ||
     value === CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_ATTACK_ATTEMPT ||
     value === CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS ||
     value === CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION

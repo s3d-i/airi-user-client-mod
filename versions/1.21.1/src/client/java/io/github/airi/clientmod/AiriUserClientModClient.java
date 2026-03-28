@@ -14,7 +14,12 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.event.client.player.ClientPlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.event.player.AttackBlockCallback;
+import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
+import net.fabricmc.fabric.api.event.player.UseBlockCallback;
+import net.fabricmc.fabric.api.event.player.UseEntityCallback;
+import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.minecraft.util.ActionResult;
+import net.minecraft.util.TypedActionResult;
 
 public final class AiriUserClientModClient implements ClientModInitializer {
 	private static final DebugHudObservationStore DEBUG_STORE = new DebugHudObservationStore();
@@ -80,6 +85,22 @@ public final class AiriUserClientModClient implements ClientModInitializer {
 		ClientTickEvents.END_CLIENT_TICK.register(observationOrchestrator::onEndClientTick);
 		AttackBlockCallback.EVENT.register((player, world, hand, pos, direction) -> {
 			observationOrchestrator.onAttackBlock(player, world, hand, pos, direction);
+			return ActionResult.PASS;
+		});
+		UseItemCallback.EVENT.register((player, world, hand) -> {
+			observationOrchestrator.onUseItem(player, world, hand);
+			return TypedActionResult.pass(player.getStackInHand(hand));
+		});
+		UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
+			observationOrchestrator.onUseBlock(player, world, hand, hitResult);
+			return ActionResult.PASS;
+		});
+		UseEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
+			observationOrchestrator.onUseEntity(player, world, hand, entity, hitResult);
+			return ActionResult.PASS;
+		});
+		AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
+			observationOrchestrator.onAttackEntity(player, world, hand, entity, hitResult);
 			return ActionResult.PASS;
 		});
 		ClientPlayerBlockBreakEvents.AFTER.register(observationOrchestrator::onAfterClientBlockBreak);

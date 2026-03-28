@@ -120,9 +120,15 @@ export function describeTraceDetail(event: RawTraceEvent): string {
       return `slot ${event.payload.previousSelectedSlot} -> ${event.payload.selectedSlot}`;
     case "player.hand_state.changed":
       return formatItemStack(event.payload.mainHand);
+    case "interaction.item.use.attempt":
+      return `${formatItemStack(event.payload.heldItem)} via ${event.payload.hand}`;
+    case "interaction.block.use.attempt":
     case "interaction.block.attack.attempt":
     case "interaction.block.break.success":
       return `${event.payload.block.blockId} @ ${formatBlockPosition(event.payload.block.position)}`;
+    case "interaction.entity.use.attempt":
+    case "interaction.entity.attack.attempt":
+      return `${formatEntityReference(event.payload.entity)} via ${event.payload.hand}`;
     case "inventory.transaction":
       return `${event.payload.changedSlots.length} slot change(s)`;
   }
@@ -165,4 +171,11 @@ function formatBlockPosition(
   position: { readonly x: number; readonly y: number; readonly z: number } | undefined
 ): string {
   return position == null ? "n/a" : `${position.x}, ${position.y}, ${position.z}`;
+}
+
+function formatEntityReference(entity: {
+  readonly entityTypeId: string;
+  readonly entityId?: number;
+}): string {
+  return entity.entityId == null ? entity.entityTypeId : `${entity.entityTypeId}#${entity.entityId}`;
 }

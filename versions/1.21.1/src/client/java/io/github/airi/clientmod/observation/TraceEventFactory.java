@@ -1,7 +1,11 @@
 package io.github.airi.clientmod.observation;
 
 import io.github.airi.clientmod.core.trace.InteractionBlockAttackAttemptTraceEvent;
+import io.github.airi.clientmod.core.trace.InteractionBlockUseAttemptTraceEvent;
 import io.github.airi.clientmod.core.trace.InteractionBlockBreakSuccessTraceEvent;
+import io.github.airi.clientmod.core.trace.InteractionEntityAttackAttemptTraceEvent;
+import io.github.airi.clientmod.core.trace.InteractionEntityUseAttemptTraceEvent;
+import io.github.airi.clientmod.core.trace.InteractionItemUseAttemptTraceEvent;
 import io.github.airi.clientmod.core.trace.InventoryTransactionTraceEvent;
 import io.github.airi.clientmod.core.trace.PlayerHandStateChangedTraceEvent;
 import io.github.airi.clientmod.core.trace.PlayerLookTargetChangedTraceEvent;
@@ -113,6 +117,90 @@ public final class TraceEventFactory {
 			worldTick,
 			dimensionKey,
 			createBlockReference(blockId, pos, hitFace),
+			hand,
+			selectedSlot,
+			heldItem
+		);
+	}
+
+	public InteractionItemUseAttemptTraceEvent createItemUseAttempt(
+		WorldSessionTracker.SampleTraceContext traceContext,
+		long worldTick,
+		String dimensionKey,
+		String hand,
+		int selectedSlot,
+		TraceEvent.ItemStackSnapshot heldItem
+	) {
+		return new InteractionItemUseAttemptTraceEvent(
+			traceContext.sequence(),
+			traceContext.capturedAtMillis(),
+			worldTick,
+			dimensionKey,
+			hand,
+			selectedSlot,
+			heldItem
+		);
+	}
+
+	public InteractionBlockUseAttemptTraceEvent createBlockUseAttempt(
+		WorldSessionTracker.SampleTraceContext traceContext,
+		long worldTick,
+		String dimensionKey,
+		String blockId,
+		BlockPos pos,
+		String hitFace,
+		String hand,
+		int selectedSlot,
+		TraceEvent.ItemStackSnapshot heldItem
+	) {
+		return new InteractionBlockUseAttemptTraceEvent(
+			traceContext.sequence(),
+			traceContext.capturedAtMillis(),
+			worldTick,
+			dimensionKey,
+			createBlockReference(blockId, pos, hitFace),
+			hand,
+			selectedSlot,
+			heldItem
+		);
+	}
+
+	public InteractionEntityUseAttemptTraceEvent createEntityUseAttempt(
+		WorldSessionTracker.SampleTraceContext traceContext,
+		long worldTick,
+		String dimensionKey,
+		TraceEvent.LookTargetEntity entity,
+		String hand,
+		int selectedSlot,
+		TraceEvent.ItemStackSnapshot heldItem
+	) {
+		return new InteractionEntityUseAttemptTraceEvent(
+			traceContext.sequence(),
+			traceContext.capturedAtMillis(),
+			worldTick,
+			dimensionKey,
+			entity,
+			hand,
+			selectedSlot,
+			heldItem
+		);
+	}
+
+	public InteractionEntityAttackAttemptTraceEvent createEntityAttackAttempt(
+		WorldSessionTracker.SampleTraceContext traceContext,
+		long worldTick,
+		String dimensionKey,
+		TraceEvent.LookTargetEntity entity,
+		String hand,
+		int selectedSlot,
+		TraceEvent.ItemStackSnapshot heldItem
+	) {
+		return new InteractionEntityAttackAttemptTraceEvent(
+			traceContext.sequence(),
+			traceContext.capturedAtMillis(),
+			worldTick,
+			dimensionKey,
+			entity,
 			hand,
 			selectedSlot,
 			heldItem

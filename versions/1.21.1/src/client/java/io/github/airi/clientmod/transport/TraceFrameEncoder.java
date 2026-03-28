@@ -6,7 +6,11 @@ import java.util.Objects;
 import io.github.airi.clientmod.transport.contract.SessionStartPayload;
 import io.github.airi.clientmod.transport.contract.TraceEventKinds;
 import io.github.airi.clientmod.core.trace.InteractionBlockAttackAttemptTraceEvent;
+import io.github.airi.clientmod.core.trace.InteractionBlockUseAttemptTraceEvent;
 import io.github.airi.clientmod.core.trace.InteractionBlockBreakSuccessTraceEvent;
+import io.github.airi.clientmod.core.trace.InteractionEntityAttackAttemptTraceEvent;
+import io.github.airi.clientmod.core.trace.InteractionEntityUseAttemptTraceEvent;
+import io.github.airi.clientmod.core.trace.InteractionItemUseAttemptTraceEvent;
 import io.github.airi.clientmod.core.trace.InventoryTransactionTraceEvent;
 import io.github.airi.clientmod.core.trace.PlayerHandStateChangedTraceEvent;
 import io.github.airi.clientmod.core.trace.PlayerLookTargetChangedTraceEvent;
@@ -52,6 +56,34 @@ public final class TraceFrameEncoder {
 			return new EncodedTraceFrame(
 				TraceEventKinds.INTERACTION_BLOCK_ATTACK_ATTEMPT,
 				serializeInteractionBlockAttackAttemptTraceEvent(sessionId, blockAttackAttempt)
+			);
+		}
+
+		if (event instanceof InteractionItemUseAttemptTraceEvent itemUseAttempt) {
+			return new EncodedTraceFrame(
+				TraceEventKinds.INTERACTION_ITEM_USE_ATTEMPT,
+				serializeInteractionItemUseAttemptTraceEvent(sessionId, itemUseAttempt)
+			);
+		}
+
+		if (event instanceof InteractionBlockUseAttemptTraceEvent blockUseAttempt) {
+			return new EncodedTraceFrame(
+				TraceEventKinds.INTERACTION_BLOCK_USE_ATTEMPT,
+				serializeInteractionBlockUseAttemptTraceEvent(sessionId, blockUseAttempt)
+			);
+		}
+
+		if (event instanceof InteractionEntityUseAttemptTraceEvent entityUseAttempt) {
+			return new EncodedTraceFrame(
+				TraceEventKinds.INTERACTION_ENTITY_USE_ATTEMPT,
+				serializeInteractionEntityUseAttemptTraceEvent(sessionId, entityUseAttempt)
+			);
+		}
+
+		if (event instanceof InteractionEntityAttackAttemptTraceEvent entityAttackAttempt) {
+			return new EncodedTraceFrame(
+				TraceEventKinds.INTERACTION_ENTITY_ATTACK_ATTEMPT,
+				serializeInteractionEntityAttackAttemptTraceEvent(sessionId, entityAttackAttempt)
 			);
 		}
 
@@ -160,6 +192,75 @@ public final class TraceFrameEncoder {
 		appendCommonPayloadStart(json, event);
 		json.append("\"block\":");
 		appendBlockReference(json, event.block());
+		json.append(',');
+		json.append("\"hand\":\"").append(escapeJson(event.hand())).append("\",");
+		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
+		json.append("\"heldItem\":");
+		appendItemStackSnapshot(json, event.heldItem());
+		json.append("}}");
+		return json.toString();
+	}
+
+	private String serializeInteractionItemUseAttemptTraceEvent(
+		String sessionId,
+		InteractionItemUseAttemptTraceEvent event
+	) {
+		StringBuilder json = new StringBuilder(320);
+		appendTraceEnvelopeStart(json, sessionId, TraceEventKinds.INTERACTION_ITEM_USE_ATTEMPT, event);
+		appendCommonPayloadStart(json, event);
+		json.append("\"hand\":\"").append(escapeJson(event.hand())).append("\",");
+		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
+		json.append("\"heldItem\":");
+		appendItemStackSnapshot(json, event.heldItem());
+		json.append("}}");
+		return json.toString();
+	}
+
+	private String serializeInteractionBlockUseAttemptTraceEvent(
+		String sessionId,
+		InteractionBlockUseAttemptTraceEvent event
+	) {
+		StringBuilder json = new StringBuilder(320);
+		appendTraceEnvelopeStart(json, sessionId, TraceEventKinds.INTERACTION_BLOCK_USE_ATTEMPT, event);
+		appendCommonPayloadStart(json, event);
+		json.append("\"block\":");
+		appendBlockReference(json, event.block());
+		json.append(',');
+		json.append("\"hand\":\"").append(escapeJson(event.hand())).append("\",");
+		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
+		json.append("\"heldItem\":");
+		appendItemStackSnapshot(json, event.heldItem());
+		json.append("}}");
+		return json.toString();
+	}
+
+	private String serializeInteractionEntityUseAttemptTraceEvent(
+		String sessionId,
+		InteractionEntityUseAttemptTraceEvent event
+	) {
+		StringBuilder json = new StringBuilder(320);
+		appendTraceEnvelopeStart(json, sessionId, TraceEventKinds.INTERACTION_ENTITY_USE_ATTEMPT, event);
+		appendCommonPayloadStart(json, event);
+		json.append("\"entity\":");
+		appendLookTargetEntity(json, event.entity());
+		json.append(',');
+		json.append("\"hand\":\"").append(escapeJson(event.hand())).append("\",");
+		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
+		json.append("\"heldItem\":");
+		appendItemStackSnapshot(json, event.heldItem());
+		json.append("}}");
+		return json.toString();
+	}
+
+	private String serializeInteractionEntityAttackAttemptTraceEvent(
+		String sessionId,
+		InteractionEntityAttackAttemptTraceEvent event
+	) {
+		StringBuilder json = new StringBuilder(320);
+		appendTraceEnvelopeStart(json, sessionId, TraceEventKinds.INTERACTION_ENTITY_ATTACK_ATTEMPT, event);
+		appendCommonPayloadStart(json, event);
+		json.append("\"entity\":");
+		appendLookTargetEntity(json, event.entity());
 		json.append(',');
 		json.append("\"hand\":\"").append(escapeJson(event.hand())).append("\",");
 		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');

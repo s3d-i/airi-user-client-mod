@@ -11,9 +11,12 @@ import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.world.ClientWorld;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.registry.Registries;
 import net.minecraft.util.Hand;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.world.World;
@@ -24,6 +27,7 @@ public final class ObservationOrchestrator {
 	private final WorldSessionTracker worldSessionTracker;
 	private final ClientSnapshotReader snapshotReader;
 	private final List<CaptureStage> captureStages;
+	private final InputInteractionCaptureStage inputInteractionCaptureStage;
 	private final BlockBreakCaptureStage blockBreakCaptureStage;
 
 	public ObservationOrchestrator(ObservationEmitter emitter, WorldSessionTracker worldSessionTracker) {
@@ -54,6 +58,7 @@ public final class ObservationOrchestrator {
 		this.emitter = emitter;
 		this.worldSessionTracker = worldSessionTracker;
 		this.snapshotReader = snapshotReader;
+		this.inputInteractionCaptureStage = new InputInteractionCaptureStage(snapshotReader, traceEventFactory);
 		this.blockBreakCaptureStage = new BlockBreakCaptureStage(snapshotReader, traceEventFactory);
 		this.captureStages = List.of(
 			new ChangedStateCaptureStage(
@@ -62,6 +67,7 @@ public final class ObservationOrchestrator {
 				handStateChangeDetector,
 				traceEventFactory
 			),
+			inputInteractionCaptureStage,
 			blockBreakCaptureStage,
 			new InventoryDeltaCaptureStage(inventoryDeltaDetector, traceEventFactory),
 			new PeriodicSampleCaptureStage(periodicMotionSampler, traceEventFactory)
@@ -141,6 +147,56 @@ public final class ObservationOrchestrator {
 		blockBreakCaptureStage.recordAttempt(player, world, hand, pos, direction);
 	}
 
+	public void onUseItem(PlayerEntity player, World world, Hand hand) {
+		if (player == null || world == null || !world.isClient() || !worldSessionTracker.hasActiveSession()) {
+			return;
+		}
+
+		inputInteractionCaptureStage.recordItemUseAttempt(player, world, hand);
+	}
+
+	public void onUseBlock(PlayerEntity player, World world, Hand hand, BlockHitResult hitResult) {
+		if (
+			player == null ||
+			world == null ||
+			hitResult == null ||
+			!world.isClient() ||
+			!worldSessionTracker.hasActiveSession()
+		) {
+			return;
+		}
+
+		inputInteractionCaptureStage.recordBlockUseAttempt(player, world, hand, hitResult);
+	}
+
+	public void onUseEntity(PlayerEntity player, World world, Hand hand, Entity entity, EntityHitResult hitResult) {
+		if (
+			player == null ||
+			world == null ||
+			entity == null ||
+			!world.isClient() ||
+			!worldSessionTracker.hasActiveSession()
+		) {
+			return;
+		}
+
+		inputInteractionCaptureStage.recordEntityUseAttempt(player, world, hand, entity, hitResult);
+	}
+
+	public void onAttackEntity(PlayerEntity player, World world, Hand hand, Entity entity, EntityHitResult hitResult) {
+		if (
+			player == null ||
+			world == null ||
+			entity == null ||
+			!world.isClient() ||
+			!worldSessionTracker.hasActiveSession()
+		) {
+			return;
+		}
+
+		inputInteractionCaptureStage.recordEntityAttackAttempt(player, world, hand, entity, hitResult);
+	}
+
 	public void onAfterClientBlockBreak(ClientWorld world, ClientPlayerEntity player, BlockPos pos, BlockState state) {
 		if (world == null || player == null || pos == null || state == null || !worldSessionTracker.hasActiveSession()) {
 			return;
@@ -165,8 +221,9 @@ public final class ObservationOrchestrator {
 
 	private enum StageOrder {
 		// Fixed ordering is intentional to keep raw evidence replay deterministic:
-		// changed state transitions -> block break interactions -> inventory delta -> periodic samples.
+		// changed state transitions -> input attempts -> block break interactions -> inventory delta -> periodic samples.
 		CHANGED_STATE,
+		INPUT_INTERACTION,
 		BLOCK_BREAK,
 		INVENTORY_DELTA,
 		PERIODIC_SAMPLE
@@ -284,6 +341,247 @@ public final class ObservationOrchestrator {
 			lookTargetChangeDetector.reset();
 			selectedSlotChangeDetector.reset();
 			handStateChangeDetector.reset();
+		}
+	}
+
+	private static final class InputInteractionCaptureStage implements CaptureStage {
+		private static final String MAIN_HAND_KEY = "main_hand";
+		private static final String OFF_HAND_KEY = "off_hand";
+
+		private final ClientSnapshotReader snapshotReader;
+		private final TraceEventFactory traceEventFactory;
+		private final List<InputInteractionSignal> pendingSignals = new ArrayList<>();
+		private long nextSignalOrder = 1L;
+
+		InputInteractionCaptureStage(ClientSnapshotReader snapshotReader, TraceEventFactory traceEventFactory) {
+			this.snapshotReader = snapshotReader;
+			this.traceEventFactory = traceEventFactory;
+		}
+
+		void recordItemUseAttempt(PlayerEntity player, World world, Hand hand) {
+			String handKey = toHandKey(hand);
+			pendingSignals.add(
+				new ItemUseAttemptSignal(
+					nextSignalOrder++,
+					world.getRegistryKey().getValue().toString(),
+					world.getTime(),
+					handKey,
+					player.getInventory().selectedSlot,
+					captureHeldItem(player, hand)
+				)
+			);
+		}
+
+		void recordBlockUseAttempt(PlayerEntity player, World world, Hand hand, BlockHitResult hitResult) {
+			BlockPos immutablePos = hitResult.getBlockPos().toImmutable();
+			String handKey = toHandKey(hand);
+			pendingSignals.add(
+				new BlockUseAttemptSignal(
+					nextSignalOrder++,
+					world.getRegistryKey().getValue().toString(),
+					world.getTime(),
+					Registries.BLOCK.getId(world.getBlockState(immutablePos).getBlock()).toString(),
+					immutablePos,
+					hitResult.getSide() == null ? null : hitResult.getSide().asString(),
+					handKey,
+					player.getInventory().selectedSlot,
+					captureHeldItem(player, hand)
+				)
+			);
+		}
+
+		void recordEntityUseAttempt(
+			PlayerEntity player,
+			World world,
+			Hand hand,
+			Entity entity,
+			EntityHitResult ignoredHitResult
+		) {
+			String handKey = toHandKey(hand);
+			pendingSignals.add(
+				new EntityUseAttemptSignal(
+					nextSignalOrder++,
+					world.getRegistryKey().getValue().toString(),
+					world.getTime(),
+					captureEntityReference(entity),
+					handKey,
+					player.getInventory().selectedSlot,
+					captureHeldItem(player, hand)
+				)
+			);
+		}
+
+		void recordEntityAttackAttempt(
+			PlayerEntity player,
+			World world,
+			Hand hand,
+			Entity entity,
+			EntityHitResult ignoredHitResult
+		) {
+			String handKey = toHandKey(hand);
+			pendingSignals.add(
+				new EntityAttackAttemptSignal(
+					nextSignalOrder++,
+					world.getRegistryKey().getValue().toString(),
+					world.getTime(),
+					captureEntityReference(entity),
+					handKey,
+					player.getInventory().selectedSlot,
+					captureHeldItem(player, hand)
+				)
+			);
+		}
+
+		@Override
+		public void collect(ClientSnapshot snapshot, DraftCollector collector) {
+			if (pendingSignals.isEmpty()) {
+				return;
+			}
+
+			List<InputInteractionSignal> orderedSignals = new ArrayList<>(pendingSignals);
+			orderedSignals.sort(Comparator.comparingLong(InputInteractionSignal::signalOrder));
+
+			for (InputInteractionSignal signal : orderedSignals) {
+				if (signal instanceof ItemUseAttemptSignal itemUseAttemptSignal) {
+					collector.add(
+						StageOrder.INPUT_INTERACTION,
+						traceContext -> traceEventFactory.createItemUseAttempt(
+							traceContext,
+							itemUseAttemptSignal.worldTick(),
+							itemUseAttemptSignal.dimensionKey(),
+							itemUseAttemptSignal.hand(),
+							itemUseAttemptSignal.selectedSlot(),
+							itemUseAttemptSignal.heldItem()
+						)
+					);
+					continue;
+				}
+
+				if (signal instanceof BlockUseAttemptSignal blockUseAttemptSignal) {
+					collector.add(
+						StageOrder.INPUT_INTERACTION,
+						traceContext -> traceEventFactory.createBlockUseAttempt(
+							traceContext,
+							blockUseAttemptSignal.worldTick(),
+							blockUseAttemptSignal.dimensionKey(),
+							blockUseAttemptSignal.blockId(),
+							blockUseAttemptSignal.pos(),
+							blockUseAttemptSignal.hitFace(),
+							blockUseAttemptSignal.hand(),
+							blockUseAttemptSignal.selectedSlot(),
+							blockUseAttemptSignal.heldItem()
+						)
+					);
+					continue;
+				}
+
+				if (signal instanceof EntityUseAttemptSignal entityUseAttemptSignal) {
+					collector.add(
+						StageOrder.INPUT_INTERACTION,
+						traceContext -> traceEventFactory.createEntityUseAttempt(
+							traceContext,
+							entityUseAttemptSignal.worldTick(),
+							entityUseAttemptSignal.dimensionKey(),
+							entityUseAttemptSignal.entity(),
+							entityUseAttemptSignal.hand(),
+							entityUseAttemptSignal.selectedSlot(),
+							entityUseAttemptSignal.heldItem()
+						)
+					);
+					continue;
+				}
+
+				EntityAttackAttemptSignal entityAttackAttemptSignal = (EntityAttackAttemptSignal) signal;
+				collector.add(
+					StageOrder.INPUT_INTERACTION,
+					traceContext -> traceEventFactory.createEntityAttackAttempt(
+						traceContext,
+						entityAttackAttemptSignal.worldTick(),
+						entityAttackAttemptSignal.dimensionKey(),
+						entityAttackAttemptSignal.entity(),
+						entityAttackAttemptSignal.hand(),
+						entityAttackAttemptSignal.selectedSlot(),
+						entityAttackAttemptSignal.heldItem()
+					)
+				);
+			}
+
+			collector.addCommit(() -> pendingSignals.clear());
+		}
+
+		@Override
+		public void reset() {
+			pendingSignals.clear();
+			nextSignalOrder = 1L;
+		}
+
+		private TraceEvent.ItemStackSnapshot captureHeldItem(PlayerEntity player, Hand hand) {
+			return hand == Hand.OFF_HAND
+				? snapshotReader.captureItemStack(player.getOffHandStack())
+				: snapshotReader.captureItemStack(player.getMainHandStack());
+		}
+
+		private static TraceEvent.LookTargetEntity captureEntityReference(Entity entity) {
+			return new TraceEvent.LookTargetEntity(
+				Registries.ENTITY_TYPE.getId(entity.getType()).toString(),
+				entity.getId()
+			);
+		}
+
+		private static String toHandKey(Hand hand) {
+			return hand == Hand.OFF_HAND ? OFF_HAND_KEY : MAIN_HAND_KEY;
+		}
+
+		private interface InputInteractionSignal {
+			long signalOrder();
+		}
+
+		private record ItemUseAttemptSignal(
+			long signalOrder,
+			String dimensionKey,
+			long worldTick,
+			String hand,
+			int selectedSlot,
+			TraceEvent.ItemStackSnapshot heldItem
+		) implements InputInteractionSignal {
+		}
+
+		private record BlockUseAttemptSignal(
+			long signalOrder,
+			String dimensionKey,
+			long worldTick,
+			String blockId,
+			BlockPos pos,
+			String hitFace,
+			String hand,
+			int selectedSlot,
+			TraceEvent.ItemStackSnapshot heldItem
+		) implements InputInteractionSignal {
+			private BlockUseAttemptSignal {
+				pos = pos.toImmutable();
+			}
+		}
+
+		private record EntityUseAttemptSignal(
+			long signalOrder,
+			String dimensionKey,
+			long worldTick,
+			TraceEvent.LookTargetEntity entity,
+			String hand,
+			int selectedSlot,
+			TraceEvent.ItemStackSnapshot heldItem
+		) implements InputInteractionSignal {
+		}
+
+		private record EntityAttackAttemptSignal(
+			long signalOrder,
+			String dimensionKey,
+			long worldTick,
+			TraceEvent.LookTargetEntity entity,
+			String hand,
+			int selectedSlot,
+			TraceEvent.ItemStackSnapshot heldItem
+		) implements InputInteractionSignal {
 		}
 	}
 
