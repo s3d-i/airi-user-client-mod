@@ -1,9 +1,16 @@
 import { startTransition, useEffect, useMemo, useState } from "react";
 
 import type { HubDebugState } from "@airi-client-mod/hub-debug-surface";
-import type { RawTraceEvent, TraceItemStackSnapshot, TraceLookTarget } from "@airi-client-mod/hub-runtime";
 
 import { fetchDebugState, openDebugStateFeed, resolveDebugSurfaceBaseUrl } from "./api.js";
+import {
+  describeTraceDetail,
+  describeTraceSummary,
+  toMotionSampleRows,
+  toWoodEvidenceView,
+  type DisplayValueRow,
+  type StatRow
+} from "./trace-contract-adapter.js";
 
 type FeedStatus = "connecting" | "live" | "error";
 
@@ -85,6 +92,14 @@ export function App() {
       ? `Ingress live on ${state.ingress.boundAddress?.url ?? "unknown address"}`
       : "Ingress not listening";
   }, [state]);
+  const latestMotionSampleRows = useMemo(
+    () => toMotionSampleRows(state?.runtime.latestMotionSample),
+    [state?.runtime.latestMotionSample]
+  );
+  const woodEvidence = useMemo(
+    () => (state == null ? undefined : toWoodEvidenceView(state.runtime)),
+    [state]
+  );
 
   return (
     <main className="shell">
@@ -168,98 +183,19 @@ export function App() {
                   wide={true}
                 />
               </dl>
-              {state.runtime.latestMotionSample == null ? null : (
-                <div className="sample-card">
-                  <div>
-                    <span className="sample-card__label">Position</span>
-                    <strong>
-                      {formatVec3(
-                        state.runtime.latestMotionSample.payload.x,
-                        state.runtime.latestMotionSample.payload.y,
-                        state.runtime.latestMotionSample.payload.z
-                      )}
-                    </strong>
-                  </div>
-                  <div>
-                    <span className="sample-card__label">Velocity</span>
-                    <strong>
-                      {formatVec3(
-                        state.runtime.latestMotionSample.payload.vx,
-                        state.runtime.latestMotionSample.payload.vy,
-                        state.runtime.latestMotionSample.payload.vz
-                      )}
-                    </strong>
-                  </div>
-                  <div>
-                    <span className="sample-card__label">Tick</span>
-                    <strong>
-                      {state.runtime.latestMotionSample.payload.worldTick}
-                    </strong>
-                  </div>
-                </div>
-              )}
+              {latestMotionSampleRows == null ? null : <SampleCardRows rows={latestMotionSampleRows} />}
             </>
           )}
         </article>
 
         <article className="panel panel--wood">
           <PanelTitle title="Wood Evidence" subtitle="Bounded reusable projections over the recent trace stream" />
-          {state == null ? (
+          {state == null || woodEvidence == null ? (
             <EmptyState />
           ) : (
             <>
-              <dl className="stats">
-                <Stat label="Focus" value={formatTarget(state.runtime.projections.focus.currentTarget)} />
-                <Stat
-                  label="Focus Dwell"
-                  value={`${state.runtime.projections.focus.targetDwellMillis} ms`}
-                />
-                <Stat
-                  label="Main Hand"
-                  value={formatItemStack(state.runtime.projections.hand.mainHand)}
-                />
-                <Stat
-                  label="Tool"
-                  value={state.runtime.projections.hand.mainHandToolCategory ?? "n/a"}
-                />
-                <Stat
-                  label="Motion"
-                  value={state.runtime.projections.motion.movementState}
-                />
-                <Stat
-                  label="Wood Breaks"
-                  value={String(state.runtime.projections.interactionWindow.recentBreaksByResourceCategory.wood ?? 0)}
-                />
-                <Stat
-                  label="Wood Gains"
-                  value={String(state.runtime.projections.inventoryDelta.recentGainsByResourceCategory.wood ?? 0)}
-                />
-                <Stat
-                  label="Continuity Reset"
-                  value={state.runtime.projections.continuity.lastResetReason ?? "none"}
-                />
-              </dl>
-              <div className="sample-card">
-                <div>
-                  <span className="sample-card__label">Latest Gain</span>
-                  <strong>
-                    {state.runtime.projections.inventoryDelta.recentGainedItems[0] == null
-                      ? "n/a"
-                      : `${state.runtime.projections.inventoryDelta.recentGainedItems[0].itemId} x${state.runtime.projections.inventoryDelta.recentGainedItems[0].count}`}
-                  </strong>
-                </div>
-                <div>
-                  <span className="sample-card__label">Latest Break</span>
-                  <strong>
-                    {state.runtime.projections.interactionWindow.recentBlockBreaks.at(-1)?.payload.block.blockId ??
-                      "n/a"}
-                  </strong>
-                </div>
-                <div>
-                  <span className="sample-card__label">Detector Score</span>
-                  <strong>{state.runtime.detectors.composites.woodGatheringSupport.score.toFixed(2)}</strong>
-                </div>
-              </div>
+              <StatRows rows={woodEvidence.stats} />
+              <SampleCardRows rows={woodEvidence.highlights} />
             </>
           )}
         </article>
@@ -385,74 +321,33 @@ function Stat(props: { readonly label: string; readonly value: string; readonly 
   );
 }
 
+function StatRows(props: { readonly rows: readonly StatRow[] }) {
+  return (
+    <dl className="stats">
+      {props.rows.map(row => (
+        <Stat key={row.label} label={row.label} value={row.value} wide={row.wide} />
+      ))}
+    </dl>
+  );
+}
+
+function SampleCardRows(props: { readonly rows: readonly DisplayValueRow[] }) {
+  return (
+    <div className="sample-card">
+      {props.rows.map(row => (
+        <div key={row.label}>
+          <span className="sample-card__label">{row.label}</span>
+          <strong>{row.value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function EmptyState(props: { readonly message?: string }) {
   return <p className="empty-state">{props.message ?? "Waiting for debug data."}</p>;
 }
 
 function formatTimestamp(value: number | undefined): string {
   return value == null ? "n/a" : timeFormatter.format(value);
-}
-
-function formatVec3(x: number, y: number, z: number): string {
-  return `${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}`;
-}
-
-function formatItemStack(item: TraceItemStackSnapshot | undefined): string {
-  if (item == null || item.itemId == null) {
-    return "empty";
-  }
-
-  return `${item.itemId} x${item.count}`;
-}
-
-function formatTarget(target: TraceLookTarget | undefined): string {
-  if (target == null) {
-    return "n/a";
-  }
-
-  switch (target.kind) {
-    case "block":
-      return `${target.block?.blockId ?? "block"} @ ${formatBlockPosition(target.block?.position)}`;
-    case "entity":
-      return target.entity?.entityTypeId ?? "entity";
-    case "miss":
-      return "miss";
-    case "none":
-      return "none";
-  }
-}
-
-function describeTraceSummary(event: RawTraceEvent): string {
-  if ("payload" in event) {
-    return `${event.kind} · ${event.payload.dimensionKey}`;
-  }
-
-  return event.kind;
-}
-
-function describeTraceDetail(event: RawTraceEvent): string {
-  switch (event.kind) {
-    case "trace.session.start":
-    case "trace.session.end":
-      return `session ${event.sessionId}`;
-    case "player.motion.sample":
-      return formatVec3(event.payload.x, event.payload.y, event.payload.z);
-    case "player.look.target.changed":
-      return formatTarget(event.payload.target);
-    case "player.selected_slot.changed":
-      return `slot ${event.payload.previousSelectedSlot} -> ${event.payload.selectedSlot}`;
-    case "player.hand_state.changed":
-      return formatItemStack(event.payload.mainHand);
-    case "interaction.block.attack.attempt":
-    case "interaction.block.break.success":
-      return `${event.payload.block.blockId} @ ${formatBlockPosition(event.payload.block.position)}`;
-    case "inventory.transaction":
-      return `${event.payload.changedSlots.length} slot change(s)`;
-  }
-}
-
-function formatBlockPosition(
-  position: { readonly x: number; readonly y: number; readonly z: number } | undefined
-): string {
-  return position == null ? "n/a" : `${position.x}, ${position.y}, ${position.z}`;
 }
