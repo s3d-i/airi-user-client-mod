@@ -1,4 +1,4 @@
-import { getBlockResourceCategories } from "../classification/index.js";
+import { getBlockResourceCategories } from "./classification.js";
 import type { ProjectionSnapshot } from "../projection/index.js";
 import { toTraceEvidenceRef, type TraceEvidenceRef } from "../trace/index.js";
 

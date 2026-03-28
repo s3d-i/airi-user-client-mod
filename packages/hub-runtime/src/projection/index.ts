@@ -4,7 +4,7 @@ import {
   getToolCategory,
   type ResourceCategory,
   type ToolCategory
-} from "../classification/index.js";
+} from "../detector/classification.js";
 import {
   CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS,
   CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION,
