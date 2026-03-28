@@ -103,7 +103,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		TransportTelemetry telemetry,
 		ActiveSessionSupplier activeSessionSupplier
 	) {
-		this(statusStore, telemetry, activeSessionSupplier, new DefaultSessionStartPayloadSupplier());
+		this(statusStore, telemetry, activeSessionSupplier, new SessionStartPayloadSupplier());
 	}
 
 	public WebSocketObservationSink(
@@ -112,7 +112,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		ActiveSessionSupplier activeSessionSupplier,
 		SessionStartPayloadSupplier sessionStartPayloadSupplier
 	) {
-		this(statusStore, telemetry, activeSessionSupplier, sessionStartPayloadSupplier, new DefaultTraceFrameEncoder());
+		this(statusStore, telemetry, activeSessionSupplier, sessionStartPayloadSupplier, new TraceFrameEncoder());
 	}
 
 	public WebSocketObservationSink(
@@ -126,9 +126,9 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		this.telemetry = telemetry == null ? TransportTelemetry.NOOP : telemetry;
 		this.activeSessionSupplier = activeSessionSupplier == null ? () -> null : activeSessionSupplier;
 		this.sessionStartPayloadSupplier = sessionStartPayloadSupplier == null
-			? new DefaultSessionStartPayloadSupplier()
+			? new SessionStartPayloadSupplier()
 			: sessionStartPayloadSupplier;
-		this.frameEncoder = frameEncoder == null ? new DefaultTraceFrameEncoder() : frameEncoder;
+		this.frameEncoder = frameEncoder == null ? new TraceFrameEncoder() : frameEncoder;
 		this.endpointUri = resolveEndpointUri();
 		this.statusStore.setEndpoint(endpointUri.toString());
 	}
