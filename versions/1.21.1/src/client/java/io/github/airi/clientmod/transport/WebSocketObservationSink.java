@@ -58,16 +58,18 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 
 	private record FrozenSessionStartDescriptor(
 		String sessionId,
-		long sequence,
-		long capturedAtMillis,
-		SessionStartPayload payload,
 		PendingFrame frame
 	) {
 		private FrozenSessionStartDescriptor {
 			sessionId = Objects.requireNonNull(sessionId, "sessionId");
-			payload = Objects.requireNonNull(payload, "payload");
 			frame = Objects.requireNonNull(frame, "frame");
 		}
+	}
+
+	private record SocketDetachResult(
+		boolean wasSending,
+		boolean shouldReconnect
+	) {
 	}
 
 	private final HttpClient httpClient = HttpClient.newHttpClient();
@@ -176,9 +178,6 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		synchronized (this) {
 			activeSessionStartDescriptor = new FrozenSessionStartDescriptor(
 				sessionId,
-				sequence,
-				capturedAtMillis,
-				payload,
 				pendingFrame
 			);
 		}
@@ -255,10 +254,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	}
 
 	private void enqueueFrameLocked(PendingFrame pendingFrame) {
-		if (pendingFrames.size() >= MAX_PENDING_FRAMES) {
-			pendingFrames.removeFirst();
-			statusStore.recordSendSkipped("hub ingress backlog full; dropped oldest queued sample");
-		}
+		dropOldestQueuedFrameIfFullLocked();
 
 		if (pendingFrame.priority() == PendingFramePriority.HIGH) {
 			pendingFrames.addFirst(pendingFrame);
@@ -287,14 +283,20 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			return !pendingFrames.isEmpty();
 		}
 
-		if (pendingFrames.size() >= MAX_PENDING_FRAMES) {
-			pendingFrames.removeFirst();
-			statusStore.recordSendSkipped("hub ingress backlog full; dropped oldest queued sample");
-		}
+		dropOldestQueuedFrameIfFullLocked();
 
 		pendingFrames.addFirst(inFlightFrame);
 		inFlightFrame = null;
 		return true;
+	}
+
+	private void dropOldestQueuedFrameIfFullLocked() {
+		if (pendingFrames.size() < MAX_PENDING_FRAMES) {
+			return;
+		}
+
+		pendingFrames.removeFirst();
+		statusStore.recordSendSkipped("hub ingress backlog full; dropped oldest queued sample");
 	}
 
 	private void tryReconnectAndDrain() {
@@ -373,16 +375,13 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		boolean shouldReconnect;
 
 		synchronized (this) {
-			if (webSocket != socket) {
+			SocketDetachResult detachResult = detachSocketLocked(socket);
+			if (detachResult == null) {
 				return;
 			}
 
-			wasSending = sendInFlight;
-			webSocket = null;
-			connectInFlight = false;
-			sendInFlight = false;
-			needsSessionReannounceOnOpen = true;
-			shouldReconnect = restoreInFlightFrameLocked();
+			wasSending = detachResult.wasSending();
+			shouldReconnect = detachResult.shouldReconnect();
 			transition = statusCode == WebSocket.NORMAL_CLOSURE
 				? statusStore.markDisconnected(closeReason)
 				: statusStore.markError(closeReason);
@@ -411,16 +410,13 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		boolean shouldReconnect;
 
 		synchronized (this) {
-			if (webSocket != socket) {
+			SocketDetachResult detachResult = detachSocketLocked(socket);
+			if (detachResult == null) {
 				return;
 			}
 
-			wasSending = sendInFlight;
-			webSocket = null;
-			connectInFlight = false;
-			sendInFlight = false;
-			needsSessionReannounceOnOpen = true;
-			shouldReconnect = restoreInFlightFrameLocked();
+			wasSending = detachResult.wasSending();
+			shouldReconnect = detachResult.shouldReconnect();
 			transition = statusStore.markError("socket error: " + summarize(error));
 		}
 
@@ -535,6 +531,20 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			return "closed (" + statusCode + ")";
 		}
 		return "closed (" + statusCode + "): " + reason;
+	}
+
+	private SocketDetachResult detachSocketLocked(WebSocket socket) {
+		if (webSocket != socket) {
+			return null;
+		}
+
+		boolean wasSending = sendInFlight;
+		webSocket = null;
+		connectInFlight = false;
+		sendInFlight = false;
+		needsSessionReannounceOnOpen = true;
+		boolean shouldReconnect = restoreInFlightFrameLocked();
+		return new SocketDetachResult(wasSending, shouldReconnect);
 	}
 
 	private void prependSessionReannounce(WebSocket socket) {
