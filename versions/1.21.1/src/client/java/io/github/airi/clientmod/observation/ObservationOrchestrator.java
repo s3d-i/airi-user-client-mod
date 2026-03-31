@@ -28,9 +28,11 @@ public final class ObservationOrchestrator {
 	private final ObservationEmitter emitter;
 	private final WorldSessionTracker worldSessionTracker;
 	private final ClientSnapshotReader snapshotReader;
-	private final List<CaptureStage> captureStages;
+	private final ChangedStateCaptureStage changedStateCaptureStage;
 	private final InputInteractionCaptureStage inputInteractionCaptureStage;
 	private final BlockBreakCaptureStage blockBreakCaptureStage;
+	private final InventoryDeltaCaptureStage inventoryDeltaCaptureStage;
+	private final PeriodicSampleCaptureStage periodicSampleCaptureStage;
 
 	public ObservationOrchestrator(ObservationEmitter emitter, WorldSessionTracker worldSessionTracker) {
 		this(
@@ -61,21 +63,16 @@ public final class ObservationOrchestrator {
 		this.worldSessionTracker = worldSessionTracker;
 		this.snapshotReader = snapshotReader;
 		InteractionContextCapture interactionContextCapture = new InteractionContextCapture(snapshotReader);
+		this.changedStateCaptureStage = new ChangedStateCaptureStage(
+			lookTargetChangeDetector,
+			selectedSlotChangeDetector,
+			handStateChangeDetector,
+			traceEventFactory
+		);
 		this.inputInteractionCaptureStage = new InputInteractionCaptureStage(interactionContextCapture, traceEventFactory);
 		this.blockBreakCaptureStage = new BlockBreakCaptureStage(interactionContextCapture, traceEventFactory);
-		// Capture stage list order is the canonical flush order for raw evidence emission.
-		this.captureStages = List.of(
-			new ChangedStateCaptureStage(
-				lookTargetChangeDetector,
-				selectedSlotChangeDetector,
-				handStateChangeDetector,
-				traceEventFactory
-			),
-			inputInteractionCaptureStage,
-			blockBreakCaptureStage,
-			new InventoryDeltaCaptureStage(inventoryDeltaDetector, traceEventFactory),
-			new PeriodicSampleCaptureStage(periodicMotionSampler, traceEventFactory)
-		);
+		this.inventoryDeltaCaptureStage = new InventoryDeltaCaptureStage(inventoryDeltaDetector, traceEventFactory);
+		this.periodicSampleCaptureStage = new PeriodicSampleCaptureStage(periodicMotionSampler, traceEventFactory);
 	}
 
 	public void onEndClientTick(MinecraftClient client) {
@@ -90,10 +87,13 @@ public final class ObservationOrchestrator {
 
 		ClientSnapshot snapshot = snapshotReader.read(client);
 		DraftCollector draftCollector = new DraftCollector();
-		for (int stageOrdinal = 0; stageOrdinal < captureStages.size(); stageOrdinal++) {
-			draftCollector.beginStage(stageOrdinal);
-			captureStages.get(stageOrdinal).collect(snapshot, draftCollector);
-		}
+		// Canonical flush order is the explicit call order below.
+		int stageOrdinal = 0;
+		changedStateCaptureStage.collect(snapshot, draftCollector, stageOrdinal++);
+		inputInteractionCaptureStage.collect(snapshot, draftCollector, stageOrdinal++);
+		blockBreakCaptureStage.collect(snapshot, draftCollector, stageOrdinal++);
+		inventoryDeltaCaptureStage.collect(snapshot, draftCollector, stageOrdinal++);
+		periodicSampleCaptureStage.collect(snapshot, draftCollector, stageOrdinal++);
 
 		List<DraftEvent> drafts = draftCollector.ordered();
 		if (drafts.isEmpty()) {
@@ -116,13 +116,7 @@ public final class ObservationOrchestrator {
 	}
 
 	public void onAttackBlock(PlayerEntity player, World world, Hand hand, BlockPos pos, Direction direction) {
-		if (
-			player == null ||
-			world == null ||
-			pos == null ||
-			!world.isClient() ||
-			!worldSessionTracker.hasActiveSession()
-		) {
+		if (pos == null || !canRecordInteraction(player, world)) {
 			return;
 		}
 
@@ -132,7 +126,7 @@ public final class ObservationOrchestrator {
 	}
 
 	public void onUseItem(PlayerEntity player, World world, Hand hand) {
-		if (player == null || world == null || !world.isClient() || !worldSessionTracker.hasActiveSession()) {
+		if (!canRecordInteraction(player, world)) {
 			return;
 		}
 
@@ -140,13 +134,7 @@ public final class ObservationOrchestrator {
 	}
 
 	public void onUseBlock(PlayerEntity player, World world, Hand hand, BlockHitResult hitResult) {
-		if (
-			player == null ||
-			world == null ||
-			hitResult == null ||
-			!world.isClient() ||
-			!worldSessionTracker.hasActiveSession()
-		) {
+		if (hitResult == null || !canRecordInteraction(player, world)) {
 			return;
 		}
 
@@ -154,13 +142,7 @@ public final class ObservationOrchestrator {
 	}
 
 	public void onUseEntity(PlayerEntity player, World world, Hand hand, Entity entity, EntityHitResult hitResult) {
-		if (
-			player == null ||
-			world == null ||
-			entity == null ||
-			!world.isClient() ||
-			!worldSessionTracker.hasActiveSession()
-		) {
+		if (entity == null || !canRecordInteraction(player, world)) {
 			return;
 		}
 
@@ -168,13 +150,7 @@ public final class ObservationOrchestrator {
 	}
 
 	public void onAttackEntity(PlayerEntity player, World world, Hand hand, Entity entity, EntityHitResult hitResult) {
-		if (
-			player == null ||
-			world == null ||
-			entity == null ||
-			!world.isClient() ||
-			!worldSessionTracker.hasActiveSession()
-		) {
+		if (entity == null || !canRecordInteraction(player, world)) {
 			return;
 		}
 
@@ -191,16 +167,16 @@ public final class ObservationOrchestrator {
 		blockBreakCaptureStage.recordOutcome(world, player, pos, state);
 	}
 
-	private void resetTransientState(ResetScope scope) {
-		for (CaptureStage stage : captureStages) {
-			stage.reset(scope);
-		}
+	private boolean canRecordInteraction(PlayerEntity player, World world) {
+		return player != null && world != null && world.isClient() && worldSessionTracker.hasActiveSession();
 	}
 
-	private interface CaptureStage {
-		void collect(ClientSnapshot snapshot, DraftCollector collector);
-
-		void reset(ResetScope scope);
+	private void resetTransientState(ResetScope scope) {
+		changedStateCaptureStage.reset(scope);
+		inputInteractionCaptureStage.reset(scope);
+		blockBreakCaptureStage.reset(scope);
+		inventoryDeltaCaptureStage.reset(scope);
+		periodicSampleCaptureStage.reset(scope);
 	}
 
 	private enum ResetScope {
@@ -265,30 +241,26 @@ public final class ObservationOrchestrator {
 
 		private final List<DraftEvent> drafts = new ArrayList<>();
 		private final List<Runnable> additionalCommits = new ArrayList<>();
-		private int currentStageOrdinal = -1;
 		private long nextInsertionOrder;
 
-		void beginStage(int stageOrdinal) {
-			currentStageOrdinal = stageOrdinal;
-		}
-
-		void add(long stageSignalOrder, long sourceWorldTick, DraftMaterializer materializer) {
-			add(stageSignalOrder, sourceWorldTick, materializer, NOOP);
+		void add(int stageOrdinal, long stageSignalOrder, long sourceWorldTick, DraftMaterializer materializer) {
+			add(stageOrdinal, stageSignalOrder, sourceWorldTick, materializer, NOOP);
 		}
 
 		void add(
+			int stageOrdinal,
 			long stageSignalOrder,
 			long sourceWorldTick,
 			DraftMaterializer materializer,
 			Runnable commitAction
 		) {
-			if (currentStageOrdinal < 0) {
-				throw new IllegalStateException("DraftCollector stage ordinal is not initialized");
+			if (stageOrdinal < 0) {
+				throw new IllegalArgumentException("DraftCollector stage ordinal must be non-negative");
 			}
 
 			drafts.add(
 				new DraftEvent(
-					new DraftOrder(currentStageOrdinal, stageSignalOrder, sourceWorldTick, nextInsertionOrder++),
+					new DraftOrder(stageOrdinal, stageSignalOrder, sourceWorldTick, nextInsertionOrder++),
 					materializer,
 					commitAction
 				)
@@ -321,7 +293,7 @@ public final class ObservationOrchestrator {
 		}
 	}
 
-	private static final class ChangedStateCaptureStage implements CaptureStage {
+	private static final class ChangedStateCaptureStage {
 		private final LookTargetChangeDetector lookTargetChangeDetector;
 		private final SelectedSlotChangeDetector selectedSlotChangeDetector;
 		private final HandStateChangeDetector handStateChangeDetector;
@@ -339,12 +311,12 @@ public final class ObservationOrchestrator {
 			this.traceEventFactory = traceEventFactory;
 		}
 
-		@Override
-		public void collect(ClientSnapshot snapshot, DraftCollector collector) {
+		public void collect(ClientSnapshot snapshot, DraftCollector collector, int stageOrdinal) {
 			long nextStageSignalOrder = 0L;
 			LookTargetChangeDetector.LookTargetChangeDraft lookTargetDraft = lookTargetChangeDetector.detect(snapshot);
 			if (lookTargetDraft != null) {
 				collector.add(
+					stageOrdinal,
 					nextStageSignalOrder++,
 					snapshot.worldTick(),
 					traceContext -> traceEventFactory.createLookTargetChanged(traceContext, snapshot, lookTargetDraft),
@@ -355,6 +327,7 @@ public final class ObservationOrchestrator {
 			SelectedSlotChangeDetector.SelectedSlotChangeDraft selectedSlotDraft = selectedSlotChangeDetector.detect(snapshot);
 			if (selectedSlotDraft != null) {
 				collector.add(
+					stageOrdinal,
 					nextStageSignalOrder++,
 					snapshot.worldTick(),
 					traceContext -> traceEventFactory.createSelectedSlotChanged(traceContext, snapshot, selectedSlotDraft),
@@ -365,6 +338,7 @@ public final class ObservationOrchestrator {
 			HandStateChangeDetector.HandStateChangeDraft handStateDraft = handStateChangeDetector.detect(snapshot);
 			if (handStateDraft != null) {
 				collector.add(
+					stageOrdinal,
 					nextStageSignalOrder++,
 					snapshot.worldTick(),
 					traceContext -> traceEventFactory.createHandStateChanged(traceContext, snapshot, handStateDraft),
@@ -373,7 +347,6 @@ public final class ObservationOrchestrator {
 			}
 		}
 
-		@Override
 		public void reset(ResetScope scope) {
 			lookTargetChangeDetector.reset();
 			selectedSlotChangeDetector.reset();
@@ -381,7 +354,7 @@ public final class ObservationOrchestrator {
 		}
 	}
 
-	private static final class InputInteractionCaptureStage implements CaptureStage {
+	private static final class InputInteractionCaptureStage {
 		private static final String MAIN_HAND_KEY = "main_hand";
 		private static final String OFF_HAND_KEY = "off_hand";
 
@@ -480,8 +453,7 @@ public final class ObservationOrchestrator {
 			);
 		}
 
-		@Override
-		public void collect(ClientSnapshot snapshot, DraftCollector collector) {
+		public void collect(ClientSnapshot snapshot, DraftCollector collector, int stageOrdinal) {
 			if (hasNoPendingSignals()) {
 				return;
 			}
@@ -501,6 +473,7 @@ public final class ObservationOrchestrator {
 			for (InputInteractionSignal signal : orderedSignals) {
 				if (signal instanceof ItemUseAttemptSignal itemUseAttemptSignal) {
 					collector.add(
+						stageOrdinal,
 						itemUseAttemptSignal.signalOrder(),
 						itemUseAttemptSignal.worldTick(),
 						traceContext -> traceEventFactory.createItemUseAttempt(
@@ -517,6 +490,7 @@ public final class ObservationOrchestrator {
 
 				if (signal instanceof BlockUseAttemptSignal blockUseAttemptSignal) {
 					collector.add(
+						stageOrdinal,
 						blockUseAttemptSignal.signalOrder(),
 						blockUseAttemptSignal.worldTick(),
 						traceContext -> traceEventFactory.createBlockUseAttempt(
@@ -536,6 +510,7 @@ public final class ObservationOrchestrator {
 
 				if (signal instanceof EntityUseAttemptSignal entityUseAttemptSignal) {
 					collector.add(
+						stageOrdinal,
 						entityUseAttemptSignal.signalOrder(),
 						entityUseAttemptSignal.worldTick(),
 						traceContext -> traceEventFactory.createEntityUseAttempt(
@@ -553,6 +528,7 @@ public final class ObservationOrchestrator {
 
 				EntityAttackAttemptSignal entityAttackAttemptSignal = (EntityAttackAttemptSignal) signal;
 				collector.add(
+					stageOrdinal,
 					entityAttackAttemptSignal.signalOrder(),
 					entityAttackAttemptSignal.worldTick(),
 					traceContext -> traceEventFactory.createEntityAttackAttempt(
@@ -570,7 +546,6 @@ public final class ObservationOrchestrator {
 			collector.addCommit(this::clearPendingSignals);
 		}
 
-		@Override
 		public void reset(ResetScope scope) {
 			clearPendingSignals();
 			nextSignalOrder = 1L;
@@ -656,7 +631,7 @@ public final class ObservationOrchestrator {
 		}
 	}
 
-	private static final class InventoryDeltaCaptureStage implements CaptureStage {
+	private static final class InventoryDeltaCaptureStage {
 		private final InventoryDeltaDetector inventoryDeltaDetector;
 		private final TraceEventFactory traceEventFactory;
 
@@ -665,14 +640,14 @@ public final class ObservationOrchestrator {
 			this.traceEventFactory = traceEventFactory;
 		}
 
-		@Override
-		public void collect(ClientSnapshot snapshot, DraftCollector collector) {
+		public void collect(ClientSnapshot snapshot, DraftCollector collector, int stageOrdinal) {
 			InventoryDeltaDetector.InventoryDeltaDraft inventoryDeltaDraft = inventoryDeltaDetector.detect(snapshot);
 			if (inventoryDeltaDraft == null) {
 				return;
 			}
 
 			collector.add(
+				stageOrdinal,
 				0L,
 				snapshot.worldTick(),
 				traceContext -> traceEventFactory.createInventoryTransaction(traceContext, snapshot, inventoryDeltaDraft),
@@ -680,13 +655,12 @@ public final class ObservationOrchestrator {
 			);
 		}
 
-		@Override
 		public void reset(ResetScope scope) {
 			inventoryDeltaDetector.reset();
 		}
 	}
 
-	private static final class PeriodicSampleCaptureStage implements CaptureStage {
+	private static final class PeriodicSampleCaptureStage {
 		private final PeriodicMotionSampler periodicMotionSampler;
 		private final TraceEventFactory traceEventFactory;
 
@@ -695,26 +669,25 @@ public final class ObservationOrchestrator {
 			this.traceEventFactory = traceEventFactory;
 		}
 
-		@Override
-		public void collect(ClientSnapshot snapshot, DraftCollector collector) {
+		public void collect(ClientSnapshot snapshot, DraftCollector collector, int stageOrdinal) {
 			if (!periodicMotionSampler.shouldEmitThisTick()) {
 				return;
 			}
 
 			collector.add(
+				stageOrdinal,
 				0L,
 				snapshot.worldTick(),
 				traceContext -> traceEventFactory.createPlayerMotionSample(traceContext, snapshot)
 			);
 		}
 
-		@Override
 		public void reset(ResetScope scope) {
 			periodicMotionSampler.reset();
 		}
 	}
 
-	private static final class BlockBreakCaptureStage implements CaptureStage {
+	private static final class BlockBreakCaptureStage {
 		private static final String MAIN_HAND_KEY = "main_hand";
 		private static final String UNKNOWN_HAND_KEY = "unknown";
 		private static final long MATCH_WINDOW_TICKS = 5L;
@@ -767,8 +740,7 @@ public final class ObservationOrchestrator {
 			);
 		}
 
-		@Override
-		public void collect(ClientSnapshot snapshot, DraftCollector collector) {
+		public void collect(ClientSnapshot snapshot, DraftCollector collector, int stageOrdinal) {
 			if (pendingSignals.isEmpty()) {
 				return;
 			}
@@ -792,6 +764,7 @@ public final class ObservationOrchestrator {
 					);
 
 					collector.add(
+						stageOrdinal,
 						attemptSignal.signalOrder(),
 						attemptSignal.worldTick(),
 						traceContext -> traceEventFactory.createBlockAttackAttempt(
@@ -814,6 +787,7 @@ public final class ObservationOrchestrator {
 				BlockBreakOutcomeMatchResult matchResult = matchOutcome(nextPendingAttempts, outcomeSignal);
 
 				collector.add(
+					stageOrdinal,
 					outcomeSignal.signalOrder(),
 					outcomeSignal.worldTick(),
 					traceContext -> traceEventFactory.createBlockBreakSuccess(
@@ -837,7 +811,6 @@ public final class ObservationOrchestrator {
 			});
 		}
 
-		@Override
 		public void reset(ResetScope scope) {
 			pendingAttempts.clear();
 			pendingSignals.clear();
