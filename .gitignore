@@ -5,3 +5,4 @@ out/
 run/
 node_modules/
 *.iml
+apps/local-hub/data/raw-traces/*.jsonl
