@@ -19,9 +19,7 @@ import io.github.airi.clientmod.core.trace.PlayerSelectedSlotChangedTraceEvent;
 import io.github.airi.clientmod.core.trace.TraceEvent;
 
 public final class TraceFrameEncoder {
-	private static final int TRACE_EVENT_WIRE_VERSION = 1;
-	private static final int SESSION_START_WIRE_VERSION = 2;
-	private static final int SESSION_END_WIRE_VERSION = 1;
+	private static final int WS_PROTOCOL_VERSION = 1;
 
 	public EncodedTraceFrame encodeTraceEvent(String sessionId, TraceEvent event) {
 		if (event instanceof PlayerMotionSampleTraceEvent sample) {
@@ -107,7 +105,7 @@ public final class TraceFrameEncoder {
 	public EncodedTraceFrame encodeSessionStart(String sessionId, long sequence, long capturedAtMillis, SessionStartPayload payload) {
 		StringBuilder json = new StringBuilder(768);
 		json.append('{');
-		json.append("\"v\":").append(SESSION_START_WIRE_VERSION).append(',');
+		json.append("\"wsProtocolVersion\":").append(WS_PROTOCOL_VERSION).append(',');
 		json.append("\"kind\":\"").append(TraceEventKinds.SESSION_START).append("\",");
 		json.append("\"sessionId\":\"").append(escapeJson(sessionId)).append("\",");
 		json.append("\"seq\":").append(sequence).append(',');
@@ -121,7 +119,7 @@ public final class TraceFrameEncoder {
 	public EncodedTraceFrame encodeSessionEnd(String sessionId, long sequence, long capturedAtMillis) {
 		StringBuilder json = new StringBuilder(160);
 		json.append('{');
-		json.append("\"v\":").append(SESSION_END_WIRE_VERSION).append(',');
+		json.append("\"wsProtocolVersion\":").append(WS_PROTOCOL_VERSION).append(',');
 		json.append("\"kind\":\"").append(TraceEventKinds.SESSION_END).append("\",");
 		json.append("\"sessionId\":\"").append(escapeJson(sessionId)).append("\",");
 		json.append("\"seq\":").append(sequence).append(',');
@@ -316,11 +314,9 @@ public final class TraceFrameEncoder {
 		json.append("\"loader\":\"").append(escapeJson(producer.loader())).append('"');
 		json.append("},");
 		json.append("\"schema\":{");
-		json.append("\"wireVersion\":").append(schema.wireVersion()).append(',');
-		json.append("\"canonicalVersion\":").append(schema.canonicalVersion());
+		json.append("\"traceVersion\":").append(schema.traceVersion());
 		json.append('}');
-		json.append("},");
-
+		json.append(',');
 		json.append("\"capabilities\":{");
 		json.append("\"eventKinds\":[");
 		appendStringArray(json, capabilities.eventKinds());
@@ -336,7 +332,7 @@ public final class TraceFrameEncoder {
 
 	private void appendTraceEnvelopeStart(StringBuilder json, String sessionId, String kind, TraceEvent event) {
 		json.append('{');
-		json.append("\"v\":").append(TRACE_EVENT_WIRE_VERSION).append(',');
+		json.append("\"wsProtocolVersion\":").append(WS_PROTOCOL_VERSION).append(',');
 		json.append("\"kind\":\"").append(kind).append("\",");
 		json.append("\"sessionId\":\"").append(escapeJson(sessionId)).append("\",");
 		json.append("\"seq\":").append(event.sequence()).append(',');

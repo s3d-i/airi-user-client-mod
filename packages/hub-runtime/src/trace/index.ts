@@ -1,4 +1,5 @@
-export const CURRENT_MOD_TRACE_VERSION = 2 as const;
+export const CURRENT_MOD_CANONICAL_VERSION = 2 as const;
+export const CURRENT_MOD_WS_PROTOCOL_VERSION = 1 as const;
 export const CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START = "trace.session.start" as const;
 export const CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END = "trace.session.end" as const;
 export const CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE = "player.motion.sample" as const;
@@ -91,7 +92,7 @@ export interface TraceEvidenceRef {
 }
 
 interface CurrentModWireTraceEventBase {
-  readonly v: typeof CURRENT_MOD_TRACE_VERSION;
+  readonly canonicalVersion: typeof CURRENT_MOD_CANONICAL_VERSION;
   readonly kind: RawTraceKind;
   readonly sessionId: string;
   readonly seq: number;
@@ -288,7 +289,7 @@ export function decodeCurrentModTraceEvent(input: unknown): CanonicalTraceEvent 
 
   if (frame.kind === CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START) {
     return {
-      v: CURRENT_MOD_TRACE_VERSION,
+      canonicalVersion: CURRENT_MOD_CANONICAL_VERSION,
       kind: CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START,
       sessionId: frame.sessionId,
       seq: frame.seq,
@@ -298,7 +299,7 @@ export function decodeCurrentModTraceEvent(input: unknown): CanonicalTraceEvent 
 
   if (frame.kind === CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END) {
     return {
-      v: CURRENT_MOD_TRACE_VERSION,
+      canonicalVersion: CURRENT_MOD_CANONICAL_VERSION,
       kind: CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END,
       sessionId: frame.sessionId,
       seq: frame.seq,
@@ -308,7 +309,7 @@ export function decodeCurrentModTraceEvent(input: unknown): CanonicalTraceEvent 
 
   const payload = parsePayload(frame.payload);
   const base = {
-    v: CURRENT_MOD_TRACE_VERSION,
+    canonicalVersion: CURRENT_MOD_CANONICAL_VERSION,
     sessionId: frame.sessionId,
     seq: frame.seq,
     capturedAtMillis: frame.capturedAtMillis
@@ -335,7 +336,7 @@ function decodePayloadTraceEvent(
   kind: NonSessionTraceKind,
   payload: Record<string, unknown>,
   base: {
-    readonly v: typeof CURRENT_MOD_TRACE_VERSION;
+    readonly canonicalVersion: typeof CURRENT_MOD_CANONICAL_VERSION;
     readonly sessionId: string;
     readonly seq: number;
     readonly capturedAtMillis: number;
@@ -480,13 +481,18 @@ function decodePayloadTraceEvent(
 
 function parseTraceFrame(input: unknown): ParsedTraceFrame {
   const frame = parseRecord(input, "frame must decode to an object");
+  const kind = parseTraceKind(frame.kind);
+  const wsProtocolVersion = parseIntegerNumber(
+    frame.wsProtocolVersion,
+    "wsProtocolVersion must be an integer number"
+  );
 
-  if (frame.v !== CURRENT_MOD_TRACE_VERSION) {
-    fail("unsupported trace version");
+  if (wsProtocolVersion !== CURRENT_MOD_WS_PROTOCOL_VERSION) {
+    fail("unsupported ws protocol version");
   }
 
   return {
-    kind: parseTraceKind(frame.kind),
+    kind,
     sessionId: parseNonEmptyString(frame.sessionId, "sessionId must be a non-empty string"),
     seq: parseIntegerNumber(frame.seq, "seq must be an integer number"),
     capturedAtMillis: parseIntegerNumber(

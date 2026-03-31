@@ -24,7 +24,7 @@ import {
 
 test("decodeCurrentModTraceEvent accepts inventory.transaction", () => {
   const event = decodeCurrentModTraceEvent({
-    v: 2,
+    wsProtocolVersion: 1,
     kind: CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION,
     sessionId: "session-a",
     seq: 7,
@@ -202,7 +202,7 @@ function createPlayerMotionSampleTraceEvent(
   dimensionKey = "minecraft:overworld"
 ): PlayerMotionSampleTraceEvent {
   return {
-    v: 2,
+    canonicalVersion: 2,
     kind: CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE,
     sessionId: "session-a",
     seq,
@@ -226,7 +226,7 @@ function createLookTargetChangedTraceEvent(
   dimensionKey = "minecraft:overworld"
 ): PlayerLookTargetChangedTraceEvent {
   return {
-    v: 2,
+    canonicalVersion: 2,
     kind: "player.look.target.changed",
     sessionId: "session-a",
     seq,
@@ -258,7 +258,7 @@ function createHandStateChangedTraceEvent(
   dimensionKey = "minecraft:overworld"
 ): PlayerHandStateChangedTraceEvent {
   return {
-    v: 2,
+    canonicalVersion: 2,
     kind: CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED,
     sessionId: "session-a",
     seq,
@@ -290,7 +290,7 @@ function createBlockBreakTraceEvent(
   dimensionKey = "minecraft:overworld"
 ): InteractionBlockBreakSuccessTraceEvent {
   return {
-    v: 2,
+    canonicalVersion: 2,
     kind: CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS,
     sessionId: "session-a",
     seq,
@@ -341,7 +341,7 @@ function createInventoryTransactionSlotChangeTraceEvent(
   dimensionKey = "minecraft:overworld"
 ): InventoryTransactionTraceEvent {
   return {
-    v: 2,
+    canonicalVersion: 2,
     kind: CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION,
     sessionId: "session-a",
     seq,

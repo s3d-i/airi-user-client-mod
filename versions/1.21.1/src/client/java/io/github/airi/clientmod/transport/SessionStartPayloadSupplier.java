@@ -8,8 +8,7 @@ import io.github.airi.clientmod.transport.contract.TraceEventKinds;
 import net.fabricmc.loader.api.FabricLoader;
 
 public final class SessionStartPayloadSupplier {
-	private static final int WIRE_VERSION = 2;
-	private static final int CANONICAL_VERSION = 2;
+	private static final int TRACE_VERSION = 2;
 	private static final String PRODUCER_MOD_ID = "airi-user-client-mod";
 	private static final String MINECRAFT_VERSION = "1.21.1";
 	private static final String LOADER = "fabric";
@@ -23,7 +22,7 @@ public final class SessionStartPayloadSupplier {
 					MINECRAFT_VERSION,
 					LOADER
 				),
-				new SessionStartPayload.Schema(WIRE_VERSION, CANONICAL_VERSION)
+				new SessionStartPayload.Schema(TRACE_VERSION)
 			),
 			new SessionStartPayload.Capabilities(TraceEventKinds.CAPABILITY_EVENT_KINDS),
 			new SessionStartPayload.Sampling(

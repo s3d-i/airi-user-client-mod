@@ -39,8 +39,7 @@ public record SessionStartPayload(
 	}
 
 	public record Schema(
-		int wireVersion,
-		int canonicalVersion
+		int traceVersion
 	) {
 	}
 
