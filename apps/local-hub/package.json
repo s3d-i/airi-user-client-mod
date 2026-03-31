@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "build": "pnpm --filter @airi-client-mod/local-hub^... build && tsc --project tsconfig.build.json",
+    "build:watch": "tsc --project tsconfig.build.json --watch --preserveWatchOutput",
     "clean": "rimraf dist",
-    "start": "node dist/index.js",
+    "dev": "pnpm run build && (pnpm --filter @airi-client-mod/local-hub^... --parallel run build:watch & pnpm run build:watch & node --watch dist/index.js)",
+    "start": "pnpm run build && node dist/index.js",
     "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {
