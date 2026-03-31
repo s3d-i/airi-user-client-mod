@@ -55,11 +55,14 @@ public record SessionStartPayload(
 	}
 
 	public record Sampling(
+		String playerMotionSamplingMode,
 		int playerMotionSampleIntervalTicks,
+		long playerMotionSampleIntervalMillis,
 		String inventoryScanMode,
 		int inventoryMaxChangedSlots
 	) {
 		public Sampling {
+			playerMotionSamplingMode = Objects.requireNonNull(playerMotionSamplingMode, "playerMotionSamplingMode");
 			inventoryScanMode = Objects.requireNonNull(inventoryScanMode, "inventoryScanMode");
 		}
 	}

@@ -5,6 +5,7 @@ import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.Iterator;
 import java.util.Objects;
 import java.util.concurrent.CompletionStage;
 
@@ -17,7 +18,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	private static final String HUB_INGRESS_WS_URI_PROPERTY = "airi.hub.ingress.ws.uri";
 	private static final String LEGACY_WS_URI_PROPERTY = "airi.transport.ws.uri";
 	private static final String DEFAULT_WS_URI = "ws://127.0.0.1:8787/ws";
-	// Keep a bounded backlog so reconnects and slow sends do not create avoidable trace gaps.
+	// Keep a bounded backlog for regular samples; control-plane frames may exceed this soft limit.
 	private static final int MAX_PENDING_FRAMES = 128;
 	private static final long CONNECT_ATTEMPT_GUARD_MILLIS = 1000L;
 
@@ -36,7 +37,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	}
 
 	private enum PendingFramePriority {
-		HIGH,
+		CONTROL,
 		NORMAL
 	}
 
@@ -50,10 +51,6 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			encodedPayload = Objects.requireNonNull(encodedPayload, "encodedPayload");
 			dedupeKey = Objects.requireNonNull(dedupeKey, "dedupeKey");
 			priority = Objects.requireNonNull(priority, "priority");
-		}
-
-		private PendingFrame withPriority(PendingFramePriority nextPriority) {
-			return new PendingFrame(encodedPayload, dedupeKey, nextPriority, reconnectReannounceEligible);
 		}
 	}
 
@@ -172,7 +169,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		PendingFrame pendingFrame = new PendingFrame(
 			encodedFrame.payload(),
 			buildDedupeKey(encodedFrame.kind(), sessionId, sequence),
-			PendingFramePriority.HIGH,
+			PendingFramePriority.CONTROL,
 			true
 		);
 
@@ -191,7 +188,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		PendingFrame pendingFrame = new PendingFrame(
 			encodedFrame.payload(),
 			buildDedupeKey(encodedFrame.kind(), sessionId, sequence),
-			PendingFramePriority.NORMAL,
+			PendingFramePriority.CONTROL,
 			false
 		);
 
@@ -255,9 +252,14 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	}
 
 	private void enqueueFrameLocked(PendingFrame pendingFrame) {
-		dropOldestQueuedFrameIfFullLocked();
+		if (!ensureQueueCapacityForLocked(
+			pendingFrame,
+			"hub ingress backlog full; dropped incoming sample to preserve control frames"
+		)) {
+			return;
+		}
 
-		if (pendingFrame.priority() == PendingFramePriority.HIGH) {
+		if (pendingFrame.priority() == PendingFramePriority.CONTROL) {
 			pendingFrames.addFirst(pendingFrame);
 			return;
 		}
@@ -284,20 +286,49 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			return !pendingFrames.isEmpty();
 		}
 
-		dropOldestQueuedFrameIfFullLocked();
+		if (!ensureQueueCapacityForLocked(
+			inFlightFrame,
+			"hub ingress backlog full; dropped retried sample to preserve control frames"
+		)) {
+			inFlightFrame = null;
+			return !pendingFrames.isEmpty();
+		}
 
 		pendingFrames.addFirst(inFlightFrame);
 		inFlightFrame = null;
 		return true;
 	}
 
-	private void dropOldestQueuedFrameIfFullLocked() {
+	private boolean ensureQueueCapacityForLocked(PendingFrame incomingFrame, String incomingDropReason) {
 		if (pendingFrames.size() < MAX_PENDING_FRAMES) {
-			return;
+			return true;
 		}
 
-		pendingFrames.removeFirst();
-		statusStore.recordSendSkipped("hub ingress backlog full; dropped oldest queued sample");
+		if (dropOldestDroppableQueuedFrameLocked()) {
+			return true;
+		}
+
+		if (incomingFrame.priority() == PendingFramePriority.CONTROL) {
+			// Control-plane frames are non-droppable and may temporarily exceed the soft backlog limit.
+			return true;
+		}
+
+		statusStore.recordSendSkipped(incomingDropReason);
+		return false;
+	}
+
+	private boolean dropOldestDroppableQueuedFrameLocked() {
+		for (Iterator<PendingFrame> iterator = pendingFrames.iterator(); iterator.hasNext();) {
+			PendingFrame queuedFrame = iterator.next();
+			if (queuedFrame.priority() == PendingFramePriority.CONTROL) {
+				continue;
+			}
+
+			iterator.remove();
+			statusStore.recordSendSkipped("hub ingress backlog full; dropped oldest queued sample");
+			return true;
+		}
+		return false;
 	}
 
 	private void tryReconnectAndDrain() {
@@ -564,7 +595,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 				return;
 			}
 
-			PendingFrame sessionStartFrame = activeSessionStartDescriptor.frame().withPriority(PendingFramePriority.HIGH);
+			PendingFrame sessionStartFrame = activeSessionStartDescriptor.frame();
 			if (!sessionStartFrame.reconnectReannounceEligible()) {
 				return;
 			}

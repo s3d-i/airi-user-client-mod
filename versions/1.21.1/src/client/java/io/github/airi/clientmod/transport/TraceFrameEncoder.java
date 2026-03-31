@@ -324,7 +324,9 @@ public final class TraceFrameEncoder {
 		json.append(',');
 
 		json.append("\"sampling\":{");
+		json.append("\"player.motion.samplingMode\":\"").append(escapeJson(sampling.playerMotionSamplingMode())).append("\",");
 		json.append("\"player.motion.sampleIntervalTicks\":").append(sampling.playerMotionSampleIntervalTicks()).append(',');
+		json.append("\"player.motion.sampleIntervalMillis\":").append(sampling.playerMotionSampleIntervalMillis()).append(',');
 		json.append("\"inventoryScanMode\":\"").append(escapeJson(sampling.inventoryScanMode())).append("\",");
 		json.append("\"inventoryMaxChangedSlots\":").append(sampling.inventoryMaxChangedSlots());
 		json.append('}');

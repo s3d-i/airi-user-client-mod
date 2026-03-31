@@ -26,7 +26,9 @@ public final class SessionStartPayloadSupplier {
 			),
 			new SessionStartPayload.Capabilities(TraceEventKinds.CAPABILITY_EVENT_KINDS),
 			new SessionStartPayload.Sampling(
-				PeriodicMotionSampler.EMIT_INTERVAL_TICKS,
+				PeriodicMotionSampler.playerMotionSamplingMode(),
+				PeriodicMotionSampler.playerMotionSampleIntervalTicks(),
+				PeriodicMotionSampler.playerMotionSampleIntervalMillis(),
 				InventoryDeltaDetector.INVENTORY_SCAN_MODE,
 				InventoryDeltaDetector.MAX_INVENTORY_SLOT_DELTAS
 			)

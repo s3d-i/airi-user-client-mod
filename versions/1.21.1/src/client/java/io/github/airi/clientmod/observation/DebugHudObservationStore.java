@@ -48,7 +48,11 @@ public final class DebugHudObservationStore implements ObservationEmitter {
 		List<String> lines = new ArrayList<>();
 		lines.add("[AIRI] motion sample emit");
 		lines.add("mode: experimental / client-only");
-		lines.add("interval: every " + PeriodicMotionSampler.EMIT_INTERVAL_TICKS + " client ticks");
+		lines.add(
+			"interval: " + PeriodicMotionSampler.playerMotionSamplingMode() + " / " +
+			PeriodicMotionSampler.playerMotionSampleIntervalTicks() + " ticks / " +
+			PeriodicMotionSampler.playerMotionSampleIntervalMillis() + " ms"
+		);
 
 		if (latestSample == null) {
 			lines.add("status: waiting for in-world samples");
