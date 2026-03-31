@@ -2,9 +2,11 @@ import type { HubDebugState } from "@airi-client-mod/hub-debug-surface";
 
 const DEFAULT_DEBUG_SURFACE_BASE_URL = "http://127.0.0.1:8788/api/debug";
 const DEFAULT_DEBUG_STATE_TRACE_LIMIT = 200;
+const DEFAULT_DEBUG_STATE_LOG_LIMIT = 400;
 
 const DEFAULT_DEBUG_STATE_QUERY = new URLSearchParams({
-  traceLimit: String(DEFAULT_DEBUG_STATE_TRACE_LIMIT)
+  traceLimit: String(DEFAULT_DEBUG_STATE_TRACE_LIMIT),
+  logLimit: String(DEFAULT_DEBUG_STATE_LOG_LIMIT)
 }).toString();
 
 export function resolveDebugSurfaceBaseUrl(): string {
