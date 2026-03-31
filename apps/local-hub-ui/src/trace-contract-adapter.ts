@@ -28,19 +28,15 @@ export function toMotionSampleRows(
     return undefined;
   }
 
+  const payload = sample.payload;
+
   return [
-    {
-      label: "Position",
-      value: formatVec3(sample.payload.x, sample.payload.y, sample.payload.z)
-    },
-    {
-      label: "Velocity",
-      value: formatVec3(sample.payload.vx, sample.payload.vy, sample.payload.vz)
-    },
-    {
-      label: "Tick",
-      value: String(sample.payload.worldTick)
-    }
+    row("Position", formatVec3(payload.x, payload.y, payload.z)),
+    row("Velocity", formatVec3(payload.vx, payload.vy, payload.vz)),
+    row("Tick", String(payload.worldTick)),
+    row("Health", formatHealth(payload.health, payload.maxHealth, payload.absorption)),
+    row("On Ground", formatBoolean(payload.onGround)),
+    row("In Water", formatWaterState(payload.touchingWater, payload.submergedInWater))
   ];
 }
 
@@ -113,7 +109,7 @@ export function describeTraceDetail(event: RawTraceEvent): string {
     case "trace.session.end":
       return `session ${event.sessionId}`;
     case "player.motion.sample":
-      return formatVec3(event.payload.x, event.payload.y, event.payload.z);
+      return `${formatVec3(event.payload.x, event.payload.y, event.payload.z)} · ${formatHealth(event.payload.health, event.payload.maxHealth, event.payload.absorption)} · water ${formatWaterState(event.payload.touchingWater, event.payload.submergedInWater)}`;
     case "player.look.target.changed":
       return formatTarget(event.payload.target);
     case "player.selected_slot.changed":
@@ -164,7 +160,40 @@ function formatTarget(target: TraceLookTarget | undefined): string {
 }
 
 function formatVec3(x: number, y: number, z: number): string {
-  return `${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}`;
+  const values = [toFiniteNumber(x), toFiniteNumber(y), toFiniteNumber(z)];
+  if (values.some(value => value == null)) {
+    return "n/a";
+  }
+
+  const [xValue, yValue, zValue] = values as [number, number, number];
+  return `${xValue.toFixed(2)}, ${yValue.toFixed(2)}, ${zValue.toFixed(2)}`;
+}
+
+function formatHealth(health: number, maxHealth: number, absorption: number): string {
+  const healthValue = toFiniteNumber(health);
+  const maxHealthValue = toFiniteNumber(maxHealth);
+  const absorptionValue = toFiniteNumber(absorption) ?? 0;
+
+  if (healthValue == null || maxHealthValue == null) {
+    return "n/a";
+  }
+
+  const base = `${healthValue.toFixed(1)} / ${maxHealthValue.toFixed(1)}`;
+  return absorptionValue > 0 ? `${base} (+${absorptionValue.toFixed(1)})` : base;
+}
+
+function formatWaterState(touchingWater: boolean, submergedInWater: boolean): string {
+  return submergedInWater === true
+    ? "submerged"
+    : touchingWater === true
+      ? "touching"
+      : touchingWater === false && submergedInWater === false
+        ? "no"
+        : "n/a";
+}
+
+function formatBoolean(value: boolean): string {
+  return value === true ? "yes" : value === false ? "no" : "n/a";
 }
 
 function formatBlockPosition(
@@ -178,4 +207,12 @@ function formatEntityReference(entity: {
   readonly entityId?: number;
 }): string {
   return entity.entityId == null ? entity.entityTypeId : `${entity.entityTypeId}#${entity.entityId}`;
+}
+
+function toFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function row(label: string, value: string): DisplayValueRow {
+  return { label, value };
 }

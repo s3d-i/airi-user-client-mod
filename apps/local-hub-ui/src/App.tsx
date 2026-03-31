@@ -370,6 +370,16 @@ export function App() {
                   <div>
                     <strong>{trace.traceId}</strong>
                     <p className={`${MUTED_TEXT_CLASS} mt-1`}>{describeTraceSummary(trace.event)}</p>
+                    {"payload" in trace.event ? (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer font-mono text-[0.78rem] text-[#1c1a17]/70">
+                          payload
+                        </summary>
+                        <pre className="mt-2 overflow-auto rounded-xl border border-[#1c1a17]/10 bg-[#1c1a17]/4 p-3 text-[0.78rem] leading-snug text-[#1c1a17]/88">
+                          {toPrettyJson(trace.event.payload)}
+                        </pre>
+                      </details>
+                    ) : null}
                   </div>
                   <div className={LIST_META_CLASS}>
                     <span>{formatTimestamp(trace.retainedAtMillis)}</span>
@@ -610,4 +620,12 @@ function LogEntryCard(props: { readonly entry: LogEntry }) {
 
 function formatTimestamp(value: number | undefined): string {
   return value == null ? "n/a" : timeFormatter.format(value);
+}
+
+function toPrettyJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return "[unserializable payload]";
+  }
 }

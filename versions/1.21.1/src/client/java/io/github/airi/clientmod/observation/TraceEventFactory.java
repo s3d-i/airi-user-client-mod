@@ -33,7 +33,13 @@ public final class TraceEventFactory {
 			snapshot.position().z(),
 			snapshot.velocity().x(),
 			snapshot.velocity().y(),
-			snapshot.velocity().z()
+			snapshot.velocity().z(),
+			snapshot.health(),
+			snapshot.maxHealth(),
+			snapshot.absorption(),
+			snapshot.onGround(),
+			snapshot.touchingWater(),
+			snapshot.submergedInWater()
 		);
 	}
 

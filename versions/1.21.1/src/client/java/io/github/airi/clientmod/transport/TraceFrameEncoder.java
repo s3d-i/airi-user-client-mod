@@ -137,7 +137,13 @@ public final class TraceFrameEncoder {
 		json.append("\"z\":").append(sample.z()).append(',');
 		json.append("\"vx\":").append(sample.vx()).append(',');
 		json.append("\"vy\":").append(sample.vy()).append(',');
-		json.append("\"vz\":").append(sample.vz());
+		json.append("\"vz\":").append(sample.vz()).append(',');
+		json.append("\"health\":").append(sample.health()).append(',');
+		json.append("\"maxHealth\":").append(sample.maxHealth()).append(',');
+		json.append("\"absorption\":").append(sample.absorption()).append(',');
+		json.append("\"onGround\":").append(sample.onGround()).append(',');
+		json.append("\"touchingWater\":").append(sample.touchingWater()).append(',');
+		json.append("\"submergedInWater\":").append(sample.submergedInWater());
 		json.append("}}");
 		return json.toString();
 	}
@@ -316,7 +322,7 @@ public final class TraceFrameEncoder {
 		json.append("\"schema\":{");
 		json.append("\"traceVersion\":").append(schema.traceVersion());
 		json.append('}');
-		json.append(',');
+		json.append("},");
 		json.append("\"capabilities\":{");
 		json.append("\"eventKinds\":[");
 		appendStringArray(json, capabilities.eventKinds());

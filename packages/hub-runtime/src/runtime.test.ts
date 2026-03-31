@@ -72,6 +72,43 @@ test("projection reducers retain wood-facing evidence", () => {
   assert.equal(projection.inventoryDelta.recentGainsByResourceCategory.wood, 2);
 });
 
+test("motion projection derives damage signal from effective health drops", () => {
+  let projection = createEmptyProjectionSnapshot();
+
+  projection = reduceProjectionSnapshot(
+    projection,
+    createPlayerMotionSampleTraceEvent(1_000, 1_000, "minecraft:overworld", {
+      health: 20,
+      absorption: 4
+    })
+  );
+  assert.equal(projection.motion.effectiveHealth, 24);
+  assert.equal(projection.motion.tookDamageAtLastSample, false);
+  assert.equal(projection.motion.lastDamageAtMillis, undefined);
+
+  projection = reduceProjectionSnapshot(
+    projection,
+    createPlayerMotionSampleTraceEvent(1_600, 1_001, "minecraft:overworld", {
+      health: 18,
+      absorption: 4
+    })
+  );
+  assert.equal(projection.motion.effectiveHealth, 22);
+  assert.equal(projection.motion.tookDamageAtLastSample, true);
+  assert.equal(projection.motion.lastDamageAtMillis, 1_600);
+
+  projection = reduceProjectionSnapshot(
+    projection,
+    createPlayerMotionSampleTraceEvent(2_200, 1_002, "minecraft:overworld", {
+      health: 18,
+      absorption: 4
+    })
+  );
+  assert.equal(projection.motion.effectiveHealth, 22);
+  assert.equal(projection.motion.tookDamageAtLastSample, false);
+  assert.equal(projection.motion.lastDamageAtMillis, 1_600);
+});
+
 test("inventory projection keeps recent wood gains after later wood losses", () => {
   const projection = [
     createInventoryTransactionTraceEvent(1_000, 1_000, "minecraft:oak_log", 2),
@@ -199,10 +236,11 @@ function createWoodTraceSequence(): readonly RawTraceEvent[] {
 function createPlayerMotionSampleTraceEvent(
   capturedAtMillis: number,
   seq: number,
-  dimensionKey = "minecraft:overworld"
+  dimensionKey = "minecraft:overworld",
+  overrides: Partial<PlayerMotionSampleTraceEvent["payload"]> = {}
 ): PlayerMotionSampleTraceEvent {
   return {
-    canonicalVersion: 2,
+    canonicalVersion: 3,
     kind: CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE,
     sessionId: "session-a",
     seq,
@@ -215,7 +253,14 @@ function createPlayerMotionSampleTraceEvent(
       z: 4,
       vx: 0.01,
       vy: 0,
-      vz: 0.01
+      vz: 0.01,
+      health: 20,
+      maxHealth: 20,
+      absorption: 0,
+      onGround: true,
+      touchingWater: false,
+      submergedInWater: false,
+      ...overrides
     }
   };
 }
@@ -226,7 +271,7 @@ function createLookTargetChangedTraceEvent(
   dimensionKey = "minecraft:overworld"
 ): PlayerLookTargetChangedTraceEvent {
   return {
-    canonicalVersion: 2,
+    canonicalVersion: 3,
     kind: "player.look.target.changed",
     sessionId: "session-a",
     seq,
@@ -258,7 +303,7 @@ function createHandStateChangedTraceEvent(
   dimensionKey = "minecraft:overworld"
 ): PlayerHandStateChangedTraceEvent {
   return {
-    canonicalVersion: 2,
+    canonicalVersion: 3,
     kind: CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED,
     sessionId: "session-a",
     seq,
@@ -290,7 +335,7 @@ function createBlockBreakTraceEvent(
   dimensionKey = "minecraft:overworld"
 ): InteractionBlockBreakSuccessTraceEvent {
   return {
-    canonicalVersion: 2,
+    canonicalVersion: 3,
     kind: CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS,
     sessionId: "session-a",
     seq,
@@ -341,7 +386,7 @@ function createInventoryTransactionSlotChangeTraceEvent(
   dimensionKey = "minecraft:overworld"
 ): InventoryTransactionTraceEvent {
   return {
-    canonicalVersion: 2,
+    canonicalVersion: 3,
     kind: CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION,
     sessionId: "session-a",
     seq,

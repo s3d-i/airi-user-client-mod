@@ -10,6 +10,12 @@ public record PlayerMotionSampleTraceEvent(
 	double z,
 	double vx,
 	double vy,
-	double vz
+	double vz,
+	float health,
+	float maxHealth,
+	float absorption,
+	boolean onGround,
+	boolean touchingWater,
+	boolean submergedInWater
 ) implements TraceEvent {
 }

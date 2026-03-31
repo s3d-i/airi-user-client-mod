@@ -25,6 +25,7 @@ const INVENTORY_WINDOW_MILLIS = 12_000;
 const CONTINUITY_INACTIVITY_GAP_MILLIS = 15_000;
 const MAX_WINDOW_EVENTS = 32;
 const LOW_MOTION_HORIZONTAL_SPEED_THRESHOLD = 0.08;
+const EFFECTIVE_HEALTH_DELTA_EPSILON = 1e-3;
 
 export type MovementState = "unknown" | "low_motion" | "moving";
 export type ContinuityResetReason = "session.changed" | "dimension.changed" | "inactivity.gap";
@@ -57,6 +58,9 @@ export interface MotionProjectionSnapshot {
   readonly movementState: MovementState;
   readonly speed: number;
   readonly horizontalSpeed: number;
+  readonly effectiveHealth: number;
+  readonly tookDamageAtLastSample: boolean;
+  readonly lastDamageAtMillis?: number;
   readonly lowMotionSince?: number;
   readonly lastUpdatedAtMillis?: number;
 }
@@ -153,7 +157,9 @@ function createEmptyMotionProjectionSnapshot(): MotionProjectionSnapshot {
   return {
     movementState: "unknown",
     speed: 0,
-    horizontalSpeed: 0
+    horizontalSpeed: 0,
+    effectiveHealth: 0,
+    tookDamageAtLastSample: false
   };
 }
 
@@ -307,6 +313,13 @@ function reduceMotionProjectionSnapshot(
 
   const horizontalSpeed = Math.hypot(event.payload.vx, event.payload.vz);
   const speed = Math.hypot(event.payload.vx, event.payload.vy, event.payload.vz);
+  const effectiveHealth = Math.max(0, event.payload.health + event.payload.absorption);
+  const tookDamageAtLastSample =
+    previous.lastUpdatedAtMillis != null &&
+    effectiveHealth < previous.effectiveHealth - EFFECTIVE_HEALTH_DELTA_EPSILON;
+  const lastDamageAtMillis = tookDamageAtLastSample
+    ? event.capturedAtMillis
+    : previous.lastDamageAtMillis;
   const movementState: MovementState =
     horizontalSpeed <= LOW_MOTION_HORIZONTAL_SPEED_THRESHOLD ? "low_motion" : "moving";
   const lowMotionSince = movementState === "low_motion"
@@ -319,6 +332,9 @@ function reduceMotionProjectionSnapshot(
     movementState,
     speed,
     horizontalSpeed,
+    effectiveHealth,
+    tookDamageAtLastSample,
+    lastDamageAtMillis,
     lowMotionSince,
     lastUpdatedAtMillis: event.capturedAtMillis
   };

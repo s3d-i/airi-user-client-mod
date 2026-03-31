@@ -1,5 +1,6 @@
-export const CURRENT_MOD_CANONICAL_VERSION = 2 as const;
+export const CURRENT_MOD_CANONICAL_VERSION = 3 as const;
 export const CURRENT_MOD_WS_PROTOCOL_VERSION = 1 as const;
+export const CURRENT_MOD_TRACE_VERSION = 3 as const;
 export const CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START = "trace.session.start" as const;
 export const CURRENT_MOD_TRACE_KIND_TRACE_SESSION_END = "trace.session.end" as const;
 export const CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE = "player.motion.sample" as const;
@@ -116,6 +117,12 @@ export interface CurrentModPlayerMotionSampleTracePayload {
   readonly vx: number;
   readonly vy: number;
   readonly vz: number;
+  readonly health: number;
+  readonly maxHealth: number;
+  readonly absorption: number;
+  readonly onGround: boolean;
+  readonly touchingWater: boolean;
+  readonly submergedInWater: boolean;
 }
 
 export interface CurrentModPlayerMotionSampleTraceEvent extends CurrentModWireTraceEventBase {
@@ -288,6 +295,7 @@ export function decodeCurrentModTraceEvent(input: unknown): CanonicalTraceEvent 
   const frame = parseTraceFrame(input);
 
   if (frame.kind === CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START) {
+    parseSessionStartTraceVersion(frame.payload);
     return {
       canonicalVersion: CURRENT_MOD_CANONICAL_VERSION,
       kind: CURRENT_MOD_TRACE_KIND_TRACE_SESSION_START,
@@ -357,7 +365,31 @@ function decodePayloadTraceEvent(
           z: parseFiniteNumber(payload.z, "payload position values must be finite numbers"),
           vx: parseFiniteNumber(payload.vx, "payload velocity values must be finite numbers"),
           vy: parseFiniteNumber(payload.vy, "payload velocity values must be finite numbers"),
-          vz: parseFiniteNumber(payload.vz, "payload velocity values must be finite numbers")
+          vz: parseFiniteNumber(payload.vz, "payload velocity values must be finite numbers"),
+          health:
+            payload.health == null
+              ? 0
+              : parseFiniteNumber(payload.health, "payload.health must be a finite number"),
+          maxHealth:
+            payload.maxHealth == null
+              ? 0
+              : parseFiniteNumber(payload.maxHealth, "payload.maxHealth must be a finite number"),
+          absorption:
+            payload.absorption == null
+              ? 0
+              : parseFiniteNumber(payload.absorption, "payload.absorption must be a finite number"),
+          onGround:
+            payload.onGround == null
+              ? true
+              : parseBoolean(payload.onGround, "payload.onGround must be a boolean"),
+          touchingWater:
+            payload.touchingWater == null
+              ? false
+              : parseBoolean(payload.touchingWater, "payload.touchingWater must be a boolean"),
+          submergedInWater:
+            payload.submergedInWater == null
+              ? false
+              : parseBoolean(payload.submergedInWater, "payload.submergedInWater must be a boolean")
         }
       };
 
@@ -517,6 +549,22 @@ function parseCommonTraceContext(payload: Record<string, unknown>): CommonTraceC
   };
 }
 
+function parseSessionStartTraceVersion(payload: unknown): number {
+  const parsedPayload = parsePayload(payload);
+  const metadata = parseRecord(parsedPayload.metadata, "payload.metadata must be an object");
+  const schema = parseRecord(metadata.schema, "payload.metadata.schema must be an object");
+  const traceVersion = parseIntegerNumber(
+    schema.traceVersion,
+    "payload.metadata.schema.traceVersion must be an integer number"
+  );
+
+  if (traceVersion !== CURRENT_MOD_TRACE_VERSION && traceVersion !== 2) {
+    fail("unsupported trace version");
+  }
+
+  return traceVersion;
+}
+
 function parseLookTarget(value: unknown, path: string): TraceLookTarget {
   const target = parseRecord(value, `${path} must be an object`);
   const kind = parseTraceTargetKind(target.kind, `${path}.kind must be a supported target kind`);
@@ -637,75 +685,39 @@ function parseInventorySlotDelta(value: unknown, path: string): TraceInventorySl
 }
 
 function parseTraceKind(value: unknown): RawTraceKind {
-  if (!isSupportedTraceKind(value)) {
-    fail("unsupported trace kind");
-  }
-
-  return value;
+  return isSupportedTraceKind(value) ? value : fail("unsupported trace kind");
 }
 
 function parseTraceHandType(value: unknown): TraceHandType {
-  if (!isTraceHandType(value)) {
-    fail("payload.hand must be a supported hand type");
-  }
-
-  return value;
+  return isTraceHandType(value) ? value : fail("payload.hand must be a supported hand type");
 }
 
 function parseTraceTargetKind(value: unknown, reason: string): TraceTargetKind {
-  if (!isTraceTargetKind(value)) {
-    fail(reason);
-  }
-
-  return value;
+  return isTraceTargetKind(value) ? value : fail(reason);
 }
 
 function parseRecord(value: unknown, reason: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    fail(reason);
-  }
-
-  return value;
-}
-
-function parseString(value: unknown, reason: string): string {
-  if (typeof value !== "string") {
-    fail(reason);
-  }
-
-  return value;
+  return isRecord(value) ? value : fail(reason);
 }
 
 function parseNonEmptyString(value: unknown, reason: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    fail(reason);
-  }
-
-  return value;
+  return typeof value === "string" && value.length > 0 ? value : fail(reason);
 }
 
 function parseFiniteNumber(value: unknown, reason: string): number {
-  if (!isFiniteNumber(value)) {
-    fail(reason);
-  }
-
-  return value;
+  return isFiniteNumber(value) ? value : fail(reason);
 }
 
 function parseIntegerNumber(value: unknown, reason: string): number {
-  if (!isIntegerNumber(value)) {
-    fail(reason);
-  }
-
-  return value;
+  return isIntegerNumber(value) ? value : fail(reason);
 }
 
 function parseNonNegativeInteger(value: unknown, reason: string): number {
-  if (!isNonNegativeInteger(value)) {
-    fail(reason);
-  }
+  return isNonNegativeInteger(value) ? value : fail(reason);
+}
 
-  return value;
+function parseBoolean(value: unknown, reason: string): boolean {
+  return typeof value === "boolean" ? value : fail(reason);
 }
 
 function fail(reason: string): never {

@@ -8,7 +8,7 @@ import io.github.airi.clientmod.transport.contract.TraceEventKinds;
 import net.fabricmc.loader.api.FabricLoader;
 
 public final class SessionStartPayloadSupplier {
-	private static final int TRACE_VERSION = 2;
+	private static final int TRACE_VERSION = 3;
 	private static final String PRODUCER_MOD_ID = "airi-user-client-mod";
 	private static final String MINECRAFT_VERSION = "1.21.1";
 	private static final String LOADER = "fabric";
