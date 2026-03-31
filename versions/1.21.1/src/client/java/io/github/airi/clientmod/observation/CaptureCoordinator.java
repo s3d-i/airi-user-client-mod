@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Objects;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.screen.GameMenuScreen;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.Entity;
@@ -32,6 +33,7 @@ public final class CaptureCoordinator {
 	private final BlockBreakCaptureStage blockBreakCaptureStage;
 	private final InventoryDeltaCaptureStage inventoryDeltaCaptureStage;
 	private final PeriodicSampleCaptureStage periodicSampleCaptureStage;
+	private boolean captureSuppressedLastTick;
 
 	public CaptureCoordinator(ObservationEmitter emitter, WorldSessionTracker worldSessionTracker) {
 		this(
@@ -76,13 +78,23 @@ public final class CaptureCoordinator {
 
 	public void onEndClientTick(MinecraftClient client) {
 		if (client.world == null || client.player == null) {
+			captureSuppressedLastTick = false;
 			resetTransientState(ResetScope.WORLD_LIFETIME_TRANSIENT);
 			return;
 		}
 		if (!worldSessionTracker.hasActiveSession()) {
+			captureSuppressedLastTick = false;
 			resetTransientState(ResetScope.PER_SESSION_TRANSIENT);
 			return;
 		}
+		if (isCaptureSuppressed(client)) {
+			if (!captureSuppressedLastTick) {
+				resetTransientState(ResetScope.PER_TICK_TRANSIENT);
+			}
+			captureSuppressedLastTick = true;
+			return;
+		}
+		captureSuppressedLastTick = false;
 
 		ClientSnapshot snapshot = snapshotReader.read(client);
 		DraftCollector draftCollector = new DraftCollector();
@@ -157,7 +169,14 @@ public final class CaptureCoordinator {
 	}
 
 	public void onAfterClientBlockBreak(ClientWorld world, ClientPlayerEntity player, BlockPos pos, BlockState state) {
-		if (world == null || player == null || pos == null || state == null || !worldSessionTracker.hasActiveSession()) {
+		if (
+			world == null ||
+			player == null ||
+			pos == null ||
+			state == null ||
+			!worldSessionTracker.hasActiveSession() ||
+			isCaptureSuppressed(MinecraftClient.getInstance())
+		) {
 			return;
 		}
 
@@ -167,7 +186,15 @@ public final class CaptureCoordinator {
 	}
 
 	private boolean canRecordInteraction(PlayerEntity player, World world) {
-		return player != null && world != null && world.isClient() && worldSessionTracker.hasActiveSession();
+		return player != null &&
+			world != null &&
+			world.isClient() &&
+			worldSessionTracker.hasActiveSession() &&
+			!isCaptureSuppressed(MinecraftClient.getInstance());
+	}
+
+	private static boolean isCaptureSuppressed(MinecraftClient client) {
+		return client != null && (client.isPaused() || client.currentScreen instanceof GameMenuScreen);
 	}
 
 	private void resetTransientState(ResetScope scope) {
