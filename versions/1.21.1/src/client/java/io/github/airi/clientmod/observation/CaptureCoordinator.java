@@ -23,8 +23,7 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.world.World;
 
-public final class ObservationOrchestrator {
-	// TODO: Rename this class/file to CaptureCoordinator once external references are updated.
+public final class CaptureCoordinator {
 	private final ObservationEmitter emitter;
 	private final WorldSessionTracker worldSessionTracker;
 	private final ClientSnapshotReader snapshotReader;
@@ -34,7 +33,7 @@ public final class ObservationOrchestrator {
 	private final InventoryDeltaCaptureStage inventoryDeltaCaptureStage;
 	private final PeriodicSampleCaptureStage periodicSampleCaptureStage;
 
-	public ObservationOrchestrator(ObservationEmitter emitter, WorldSessionTracker worldSessionTracker) {
+	public CaptureCoordinator(ObservationEmitter emitter, WorldSessionTracker worldSessionTracker) {
 		this(
 			emitter,
 			worldSessionTracker,
@@ -48,7 +47,7 @@ public final class ObservationOrchestrator {
 		);
 	}
 
-	ObservationOrchestrator(
+	CaptureCoordinator(
 		ObservationEmitter emitter,
 		WorldSessionTracker worldSessionTracker,
 		ClientSnapshotReader snapshotReader,

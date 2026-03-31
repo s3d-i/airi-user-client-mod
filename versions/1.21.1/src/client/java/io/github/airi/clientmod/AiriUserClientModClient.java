@@ -2,7 +2,7 @@ package io.github.airi.clientmod;
 
 import io.github.airi.clientmod.observation.DebugHudObservationStore;
 import io.github.airi.clientmod.observation.FanoutObservationEmitter;
-import io.github.airi.clientmod.observation.ObservationOrchestrator;
+import io.github.airi.clientmod.observation.CaptureCoordinator;
 import io.github.airi.clientmod.session.WorldSessionTracker;
 import io.github.airi.clientmod.telemetry.OtelBootstrap;
 import io.github.airi.clientmod.transport.SessionStartPayloadSupplier;
@@ -26,7 +26,7 @@ public final class AiriUserClientModClient implements ClientModInitializer {
 	private static final TransportStatusStore TRANSPORT_STATUS_STORE = new TransportStatusStore();
 
 	private WebSocketObservationSink websocketSink;
-	private ObservationOrchestrator observationOrchestrator;
+	private CaptureCoordinator captureCoordinator;
 	private WorldSessionTracker worldSessionTracker;
 
 	public static DebugHudObservationStore getDebugStore() {
@@ -65,7 +65,7 @@ public final class AiriUserClientModClient implements ClientModInitializer {
 			},
 			new SessionStartPayloadSupplier()
 		);
-		observationOrchestrator = new ObservationOrchestrator(
+		captureCoordinator = new CaptureCoordinator(
 			new FanoutObservationEmitter(DEBUG_STORE, websocketSink),
 			worldSessionTracker
 		);
@@ -82,28 +82,28 @@ public final class AiriUserClientModClient implements ClientModInitializer {
 			}
 			DEBUG_STORE.reset();
 		});
-		ClientTickEvents.END_CLIENT_TICK.register(observationOrchestrator::onEndClientTick);
+		ClientTickEvents.END_CLIENT_TICK.register(captureCoordinator::onEndClientTick);
 		AttackBlockCallback.EVENT.register((player, world, hand, pos, direction) -> {
-			observationOrchestrator.onAttackBlock(player, world, hand, pos, direction);
+			captureCoordinator.onAttackBlock(player, world, hand, pos, direction);
 			return ActionResult.PASS;
 		});
 		UseItemCallback.EVENT.register((player, world, hand) -> {
-			observationOrchestrator.onUseItem(player, world, hand);
+			captureCoordinator.onUseItem(player, world, hand);
 			return TypedActionResult.pass(player.getStackInHand(hand));
 		});
 		UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
-			observationOrchestrator.onUseBlock(player, world, hand, hitResult);
+			captureCoordinator.onUseBlock(player, world, hand, hitResult);
 			return ActionResult.PASS;
 		});
 		UseEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
-			observationOrchestrator.onUseEntity(player, world, hand, entity, hitResult);
+			captureCoordinator.onUseEntity(player, world, hand, entity, hitResult);
 			return ActionResult.PASS;
 		});
 		AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
-			observationOrchestrator.onAttackEntity(player, world, hand, entity, hitResult);
+			captureCoordinator.onAttackEntity(player, world, hand, entity, hitResult);
 			return ActionResult.PASS;
 		});
-		ClientPlayerBlockBreakEvents.AFTER.register(observationOrchestrator::onAfterClientBlockBreak);
+		ClientPlayerBlockBreakEvents.AFTER.register(captureCoordinator::onAfterClientBlockBreak);
 		AiriUserClientMod.LOGGER.info("Initialized AIRI experimental Fabric client instrumentation for Minecraft 1.21.1");
 	}
 }
