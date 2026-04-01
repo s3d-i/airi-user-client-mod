@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import io.github.airi.clientmod.AiriUserClientModClient;
+import io.github.airi.clientmod.transport.TransportStatusPanelFormatter;
 import net.minecraft.client.gui.hud.DebugHud;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -12,6 +13,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(DebugHud.class)
 public abstract class DebugHudMixin {
+	private static final TransportStatusPanelFormatter TRANSPORT_STATUS_PANEL_FORMATTER = new TransportStatusPanelFormatter();
+
 	@Inject(method = "getLeftText", at = @At("RETURN"), cancellable = true)
 	private void airi$appendObservationPanel(CallbackInfoReturnable<List<String>> cir) {
 		List<String> baseLines = cir.getReturnValue();
@@ -20,7 +23,12 @@ public abstract class DebugHudMixin {
 		mergedLines.add("");
 		mergedLines.addAll(AiriUserClientModClient.getDebugStore().buildPanelLines());
 		mergedLines.add("");
-		mergedLines.addAll(AiriUserClientModClient.getTransportStatusStore().buildPanelLines());
+		mergedLines.addAll(
+			TRANSPORT_STATUS_PANEL_FORMATTER.buildPanelLines(
+				AiriUserClientModClient.getTransportStatusStore().snapshot(),
+				System.currentTimeMillis()
+			)
+		);
 		cir.setReturnValue(mergedLines);
 	}
 }

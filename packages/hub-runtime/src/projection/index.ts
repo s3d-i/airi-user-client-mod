@@ -4,15 +4,15 @@ import {
   getToolCategory,
   type ResourceCategory,
   type ToolCategory
-} from "../classification/index.js";
+} from "../detector/classification.js";
 import {
-  CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK,
+  CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS,
   CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION,
-  CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE,
+  CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE,
   CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED,
   CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED,
   CURRENT_MOD_TRACE_KIND_PLAYER_SELECTED_SLOT_CHANGED,
-  type InteractionBlockBreakTraceEvent,
+  type InteractionBlockBreakSuccessTraceEvent,
   type InventoryTransactionTraceEvent,
   type RawTraceEvent,
   type TraceItemStackSnapshot,
@@ -25,6 +25,7 @@ const INVENTORY_WINDOW_MILLIS = 12_000;
 const CONTINUITY_INACTIVITY_GAP_MILLIS = 15_000;
 const MAX_WINDOW_EVENTS = 32;
 const LOW_MOTION_HORIZONTAL_SPEED_THRESHOLD = 0.08;
+const EFFECTIVE_HEALTH_DELTA_EPSILON = 1e-3;
 
 export type MovementState = "unknown" | "low_motion" | "moving";
 export type ContinuityResetReason = "session.changed" | "dimension.changed" | "inactivity.gap";
@@ -57,13 +58,16 @@ export interface MotionProjectionSnapshot {
   readonly movementState: MovementState;
   readonly speed: number;
   readonly horizontalSpeed: number;
+  readonly effectiveHealth: number;
+  readonly tookDamageAtLastSample: boolean;
+  readonly lastDamageAtMillis?: number;
   readonly lowMotionSince?: number;
   readonly lastUpdatedAtMillis?: number;
 }
 
 export interface InteractionWindowProjectionSnapshot {
   readonly windowMillis: number;
-  readonly recentBlockBreaks: readonly InteractionBlockBreakTraceEvent[];
+  readonly recentBlockBreaks: readonly InteractionBlockBreakSuccessTraceEvent[];
   readonly recentBreaksByResourceCategory: ResourceCategoryCountMap;
   readonly lastUpdatedAtMillis?: number;
 }
@@ -153,7 +157,9 @@ function createEmptyMotionProjectionSnapshot(): MotionProjectionSnapshot {
   return {
     movementState: "unknown",
     speed: 0,
-    horizontalSpeed: 0
+    horizontalSpeed: 0,
+    effectiveHealth: 0,
+    tookDamageAtLastSample: false
   };
 }
 
@@ -268,7 +274,7 @@ function reduceHandProjectionSnapshot(
         event.payload.offHand,
         event.capturedAtMillis
       );
-    case CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK:
+    case CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS:
       return {
         ...previous,
         selectedSlot: event.payload.selectedSlot,
@@ -301,12 +307,19 @@ function reduceMotionProjectionSnapshot(
   previous: MotionProjectionSnapshot,
   event: RawTraceEvent
 ): MotionProjectionSnapshot {
-  if (event.kind !== CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE) {
+  if (event.kind !== CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE) {
     return previous;
   }
 
   const horizontalSpeed = Math.hypot(event.payload.vx, event.payload.vz);
   const speed = Math.hypot(event.payload.vx, event.payload.vy, event.payload.vz);
+  const effectiveHealth = Math.max(0, event.payload.health + event.payload.absorption);
+  const tookDamageAtLastSample =
+    previous.lastUpdatedAtMillis != null &&
+    effectiveHealth < previous.effectiveHealth - EFFECTIVE_HEALTH_DELTA_EPSILON;
+  const lastDamageAtMillis = tookDamageAtLastSample
+    ? event.capturedAtMillis
+    : previous.lastDamageAtMillis;
   const movementState: MovementState =
     horizontalSpeed <= LOW_MOTION_HORIZONTAL_SPEED_THRESHOLD ? "low_motion" : "moving";
   const lowMotionSince = movementState === "low_motion"
@@ -319,6 +332,9 @@ function reduceMotionProjectionSnapshot(
     movementState,
     speed,
     horizontalSpeed,
+    effectiveHealth,
+    tookDamageAtLastSample,
+    lastDamageAtMillis,
     lowMotionSince,
     lastUpdatedAtMillis: event.capturedAtMillis
   };
@@ -329,7 +345,7 @@ function reduceInteractionWindowProjectionSnapshot(
   event: RawTraceEvent
 ): InteractionWindowProjectionSnapshot {
   const recentBlockBreaks = trimWindow(
-    event.kind === CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK
+    event.kind === CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS
       ? [...previous.recentBlockBreaks, event]
       : previous.recentBlockBreaks,
     event.capturedAtMillis,
@@ -379,7 +395,7 @@ function trimWindow<T extends RawTraceEvent>(
 }
 
 function aggregateBreaksByResourceCategory(
-  events: readonly InteractionBlockBreakTraceEvent[]
+  events: readonly InteractionBlockBreakSuccessTraceEvent[]
 ): ResourceCategoryCountMap {
   const counts: ResourceCategoryCountMap = {};
 

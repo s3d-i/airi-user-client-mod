@@ -5,6 +5,9 @@
   "scripts": {
     "build": "pnpm --recursive --if-present run build",
     "clean": "pnpm --recursive --if-present run clean",
+    "local-hub:dev": "pnpm --filter @airi-client-mod/local-hub dev",
+    "local-hub:start": "pnpm --filter @airi-client-mod/local-hub start",
+    "local-hub-ui:dev": "pnpm --filter @airi-client-mod/local-hub-ui dev",
     "typecheck": "pnpm --recursive --if-present run typecheck"
   },
   "devDependencies": {

@@ -8,22 +8,23 @@ import {
 import { evaluateDetectors } from "./detector/index.js";
 import { createEmptyProjectionSnapshot, reduceProjectionSnapshot } from "./projection/index.js";
 import {
+  CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS,
   CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION,
-  CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE,
+  CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE,
   CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED,
   CURRENT_MOD_TRACE_KIND_PLAYER_LOOK_TARGET_CHANGED,
   decodeCurrentModTraceEvent,
-  type InteractionBlockBreakTraceEvent,
+  type InteractionBlockBreakSuccessTraceEvent,
   type InventoryTransactionTraceEvent,
-  type ObservationSampleTraceEvent,
+  type PlayerMotionSampleTraceEvent,
   type PlayerHandStateChangedTraceEvent,
   type PlayerLookTargetChangedTraceEvent,
   type RawTraceEvent
 } from "./trace/index.js";
 
 test("decodeCurrentModTraceEvent accepts inventory.transaction", () => {
-  const result = decodeCurrentModTraceEvent({
-    v: 1,
+  const event = decodeCurrentModTraceEvent({
+    wsProtocolVersion: 1,
     kind: CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION,
     sessionId: "session-a",
     seq: 7,
@@ -53,13 +54,8 @@ test("decodeCurrentModTraceEvent accepts inventory.transaction", () => {
     }
   });
 
-  assert.equal(result.ok, true);
-  if (!result.ok) {
-    return;
-  }
-
-  assert.equal(result.event.kind, CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION);
-  assert.equal(result.event.payload.changedSlots[0]?.current.itemId, "minecraft:oak_log");
+  assert.equal(event.kind, CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION);
+  assert.equal(event.payload.changedSlots[0]?.current.itemId, "minecraft:oak_log");
 });
 
 test("projection reducers retain wood-facing evidence", () => {
@@ -74,6 +70,43 @@ test("projection reducers retain wood-facing evidence", () => {
   assert.equal(projection.motion.movementState, "low_motion");
   assert.equal(projection.interactionWindow.recentBreaksByResourceCategory.wood, 2);
   assert.equal(projection.inventoryDelta.recentGainsByResourceCategory.wood, 2);
+});
+
+test("motion projection derives damage signal from effective health drops", () => {
+  let projection = createEmptyProjectionSnapshot();
+
+  projection = reduceProjectionSnapshot(
+    projection,
+    createPlayerMotionSampleTraceEvent(1_000, 1_000, "minecraft:overworld", {
+      health: 20,
+      absorption: 4
+    })
+  );
+  assert.equal(projection.motion.effectiveHealth, 24);
+  assert.equal(projection.motion.tookDamageAtLastSample, false);
+  assert.equal(projection.motion.lastDamageAtMillis, undefined);
+
+  projection = reduceProjectionSnapshot(
+    projection,
+    createPlayerMotionSampleTraceEvent(1_600, 1_001, "minecraft:overworld", {
+      health: 18,
+      absorption: 4
+    })
+  );
+  assert.equal(projection.motion.effectiveHealth, 22);
+  assert.equal(projection.motion.tookDamageAtLastSample, true);
+  assert.equal(projection.motion.lastDamageAtMillis, 1_600);
+
+  projection = reduceProjectionSnapshot(
+    projection,
+    createPlayerMotionSampleTraceEvent(2_200, 1_002, "minecraft:overworld", {
+      health: 18,
+      absorption: 4
+    })
+  );
+  assert.equal(projection.motion.effectiveHealth, 22);
+  assert.equal(projection.motion.tookDamageAtLastSample, false);
+  assert.equal(projection.motion.lastDamageAtMillis, 1_600);
 });
 
 test("inventory projection keeps recent wood gains after later wood losses", () => {
@@ -130,7 +163,7 @@ test("wood gathering detector needs more than weak context alone", () => {
   const weakContextProjection = [
     createLookTargetChangedTraceEvent(1_000, 1_000),
     createHandStateChangedTraceEvent(1_050, 1_001, "minecraft:stone_axe"),
-    createObservationSampleTraceEvent(1_150, 1_002)
+    createPlayerMotionSampleTraceEvent(1_150, 1_002)
   ].reduce(
     (current, event) => reduceProjectionSnapshot(current, event),
     createEmptyProjectionSnapshot()
@@ -165,7 +198,7 @@ test("wood gathering episode opens after sustained support and closes on reset",
     });
   }
 
-  const sustainingObservation = createObservationSampleTraceEvent(3_000, 2_100);
+  const sustainingObservation = createPlayerMotionSampleTraceEvent(3_000, 2_100);
   projection = reduceProjectionSnapshot(projection, sustainingObservation);
   episodeState = stepEpisodeMachine(episodeState, {
     event: sustainingObservation,
@@ -193,27 +226,27 @@ function createWoodTraceSequence(): readonly RawTraceEvent[] {
   return [
     createLookTargetChangedTraceEvent(1_000, 1_000),
     createHandStateChangedTraceEvent(1_050, 1_001, "minecraft:stone_axe"),
-    createObservationSampleTraceEvent(1_100, 1_002),
+    createPlayerMotionSampleTraceEvent(1_100, 1_002),
     createBlockBreakTraceEvent(1_200, 1_003, "minecraft:oak_log"),
     createBlockBreakTraceEvent(1_500, 1_004, "minecraft:oak_log"),
     createInventoryTransactionTraceEvent(1_700, 1_005, "minecraft:oak_log", 2)
   ];
 }
 
-function createObservationSampleTraceEvent(
+function createPlayerMotionSampleTraceEvent(
   capturedAtMillis: number,
   seq: number,
-  dimensionKey = "minecraft:overworld"
-): ObservationSampleTraceEvent {
+  dimensionKey = "minecraft:overworld",
+  overrides: Partial<PlayerMotionSampleTraceEvent["payload"]> = {}
+): PlayerMotionSampleTraceEvent {
   return {
-    v: 1,
-    kind: CURRENT_MOD_TRACE_KIND_OBSERVATION_SAMPLE,
+    canonicalVersion: 3,
+    kind: CURRENT_MOD_TRACE_KIND_PLAYER_MOTION_SAMPLE,
     sessionId: "session-a",
     seq,
     capturedAtMillis,
     payload: {
       worldTick: 300 + seq,
-      fps: 144,
       dimensionKey,
       x: 12,
       y: 64,
@@ -221,7 +254,13 @@ function createObservationSampleTraceEvent(
       vx: 0.01,
       vy: 0,
       vz: 0.01,
-      targetDescription: "block minecraft:oak_log @ 12 64 4"
+      health: 20,
+      maxHealth: 20,
+      absorption: 0,
+      onGround: true,
+      touchingWater: false,
+      submergedInWater: false,
+      ...overrides
     }
   };
 }
@@ -232,7 +271,7 @@ function createLookTargetChangedTraceEvent(
   dimensionKey = "minecraft:overworld"
 ): PlayerLookTargetChangedTraceEvent {
   return {
-    v: 1,
+    canonicalVersion: 3,
     kind: "player.look.target.changed",
     sessionId: "session-a",
     seq,
@@ -264,7 +303,7 @@ function createHandStateChangedTraceEvent(
   dimensionKey = "minecraft:overworld"
 ): PlayerHandStateChangedTraceEvent {
   return {
-    v: 1,
+    canonicalVersion: 3,
     kind: CURRENT_MOD_TRACE_KIND_PLAYER_HAND_STATE_CHANGED,
     sessionId: "session-a",
     seq,
@@ -294,10 +333,10 @@ function createBlockBreakTraceEvent(
   seq: number,
   blockId: string,
   dimensionKey = "minecraft:overworld"
-): InteractionBlockBreakTraceEvent {
+): InteractionBlockBreakSuccessTraceEvent {
   return {
-    v: 1,
-    kind: "interaction.block.break",
+    canonicalVersion: 3,
+    kind: CURRENT_MOD_TRACE_KIND_INTERACTION_BLOCK_BREAK_SUCCESS,
     sessionId: "session-a",
     seq,
     capturedAtMillis,
@@ -347,7 +386,7 @@ function createInventoryTransactionSlotChangeTraceEvent(
   dimensionKey = "minecraft:overworld"
 ): InventoryTransactionTraceEvent {
   return {
-    v: 1,
+    canonicalVersion: 3,
     kind: CURRENT_MOD_TRACE_KIND_INVENTORY_TRANSACTION,
     sessionId: "session-a",
     seq,

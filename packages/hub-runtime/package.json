@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
+    "build:watch": "tsc --project tsconfig.build.json --watch --preserveWatchOutput",
     "clean": "rimraf dist",
     "test": "pnpm run build && node --test dist/**/*.test.js",
     "typecheck": "tsc --project tsconfig.json"

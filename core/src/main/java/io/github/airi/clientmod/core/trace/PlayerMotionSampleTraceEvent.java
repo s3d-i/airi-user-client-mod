@@ -1,10 +1,9 @@
 package io.github.airi.clientmod.core.trace;
 
-public record ObservationSample(
+public record PlayerMotionSampleTraceEvent(
 	long sequence,
 	long capturedAtMillis,
 	long worldTick,
-	int fps,
 	String dimensionKey,
 	double x,
 	double y,
@@ -12,6 +11,11 @@ public record ObservationSample(
 	double vx,
 	double vy,
 	double vz,
-	String targetDescription
+	float health,
+	float maxHealth,
+	float absorption,
+	boolean onGround,
+	boolean touchingWater,
+	boolean submergedInWater
 ) implements TraceEvent {
 }

@@ -1,11 +1,10 @@
 package io.github.airi.clientmod.core.trace;
 
-public record InteractionBlockBreakTraceEvent(
+public record InteractionItemUseAttemptTraceEvent(
 	long sequence,
 	long capturedAtMillis,
 	long worldTick,
 	String dimensionKey,
-	TraceEvent.BlockReference block,
 	String hand,
 	int selectedSlot,
 	TraceEvent.ItemStackSnapshot heldItem

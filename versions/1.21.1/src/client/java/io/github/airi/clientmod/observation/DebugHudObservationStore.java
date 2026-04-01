@@ -7,20 +7,20 @@ import java.util.List;
 import java.util.Locale;
 
 import io.github.airi.clientmod.core.trace.ObservationEmitter;
-import io.github.airi.clientmod.core.trace.ObservationSample;
+import io.github.airi.clientmod.core.trace.PlayerMotionSampleTraceEvent;
 import io.github.airi.clientmod.core.trace.TraceEvent;
 
 public final class DebugHudObservationStore implements ObservationEmitter {
 	private static final int HISTORY_LIMIT = 32;
 
-	private final Deque<ObservationSample> recentSamples = new ArrayDeque<>();
-	private ObservationSample latestSample;
+	private final Deque<PlayerMotionSampleTraceEvent> recentSamples = new ArrayDeque<>();
+	private PlayerMotionSampleTraceEvent latestSample;
 	private long totalEmitted;
 	private long firstCapturedAtMillis;
 
 	@Override
 	public void emit(TraceEvent event) {
-		if (!(event instanceof ObservationSample sample)) {
+		if (!(event instanceof PlayerMotionSampleTraceEvent sample)) {
 			return;
 		}
 
@@ -46,9 +46,13 @@ public final class DebugHudObservationStore implements ObservationEmitter {
 
 	public List<String> buildPanelLines() {
 		List<String> lines = new ArrayList<>();
-		lines.add("[AIRI] observation emit");
+		lines.add("[AIRI] motion sample emit");
 		lines.add("mode: experimental / client-only");
-		lines.add("interval: every " + ObservationSampler.EMIT_INTERVAL_TICKS + " client ticks");
+		lines.add(
+			"interval: " + PeriodicMotionSampler.playerMotionSamplingMode() + " / " +
+			PeriodicMotionSampler.playerMotionSampleIntervalTicks() + " ticks / " +
+			PeriodicMotionSampler.playerMotionSampleIntervalMillis() + " ms"
+		);
 
 		if (latestSample == null) {
 			lines.add("status: waiting for in-world samples");
@@ -62,11 +66,10 @@ public final class DebugHudObservationStore implements ObservationEmitter {
 
 		lines.add("status: live");
 		lines.add("emit seq: " + latestSample.sequence() + " | rate: " + format(emitsPerSecond) + "/s");
-		lines.add("world tick: " + latestSample.worldTick() + " | fps: " + latestSample.fps());
+		lines.add("world tick: " + latestSample.worldTick());
 		lines.add("dimension: " + latestSample.dimensionKey());
 		lines.add("pos: " + format(latestSample.x()) + ", " + format(latestSample.y()) + ", " + format(latestSample.z()));
 		lines.add("vel: " + format(latestSample.vx()) + ", " + format(latestSample.vy()) + ", " + format(latestSample.vz()));
-		lines.add("target: " + latestSample.targetDescription());
 		lines.add("buffer: " + recentSamples.size() + "/" + HISTORY_LIMIT + " | last emit: " + ageMillis + " ms ago");
 		return lines;
 	}

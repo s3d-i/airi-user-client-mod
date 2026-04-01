@@ -3,10 +3,10 @@
   "package": "io.github.airi.clientmod.mixin.client",
   "compatibilityLevel": "JAVA_21",
   "client": [
-    "DebugHudMixin"
+    "DebugHudMixin",
+    "EntityMoveMixin"
   ],
   "injectors": {
     "defaultRequire": 1
   }
 }
-

@@ -19,10 +19,9 @@ import {
   type HubIngressWsServer,
   type HubIngressWsServerOptions
 } from "@airi-client-mod/hub-ingress-ws";
-import { createConsoleHubLogSink, createStructuredHubLogger } from "@airi-client-mod/hub-logging";
 import { createHubTraceStore, type HubTraceStore } from "@airi-client-mod/hub-trace-store";
 
-import { createMemoryHubLogBuffer } from "./logger/index.js";
+import { createConsoleHubLogSink, createMemoryHubLogBuffer, useLogger } from "./logger/index.js";
 import { createRawTraceJsonlWriter } from "./raw-trace/index.js";
 
 export const DEFAULT_LOCAL_HUB_INGRESS_OPTIONS = {
@@ -35,7 +34,7 @@ export const DEFAULT_LOCAL_HUB_DEBUG_SURFACE_OPTIONS = {
   host: "127.0.0.1",
   port: 8788,
   apiBasePath: "/api/debug",
-  feedIntervalMillis: 1000
+  feedIntervalMillis: 500
 } satisfies HubDebugSurfaceServerOptions;
 
 export interface LocalHubAppOptions {
@@ -84,9 +83,13 @@ function isMainModule(metaUrl: string): boolean {
 
 export function createLocalHubApp(options: LocalHubAppOptions = {}): LocalHubApp {
   const logBuffer = createMemoryHubLogBuffer(options.logBufferCapacity);
-  const logger = createStructuredHubLogger({
-    scope: "local-hub",
-    sinks: [createConsoleHubLogSink(options.logOutput), logBuffer]
+  const shouldWriteToGlobalLogg = options.logOutput == null || options.logOutput === console;
+  const loggerSinks = shouldWriteToGlobalLogg
+    ? [logBuffer]
+    : [createConsoleHubLogSink(options.logOutput), logBuffer];
+  const logger = useLogger("local-hub", {
+    sinks: loggerSinks,
+    writeToGlobalLogg: shouldWriteToGlobalLogg
   });
   const runtime = createHubRuntime({
     logger: logger.child("runtime")

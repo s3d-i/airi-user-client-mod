@@ -1,5 +1,7 @@
 package io.github.airi.clientmod.session;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 import io.github.airi.clientmod.AiriUserClientMod;
@@ -53,6 +55,23 @@ public final class WorldSessionTracker {
 		}
 
 		return new SampleTraceContext(activeSession.sessionId(), nextTraceSequence++, System.currentTimeMillis());
+	}
+
+	public synchronized List<SampleTraceContext> beginTraces(int count) {
+		if (count < 0) {
+			throw new IllegalArgumentException("count must be non-negative");
+		}
+
+		if (activeSession == null) {
+			return null;
+		}
+
+		List<SampleTraceContext> contexts = new ArrayList<>(count);
+		String sessionId = activeSession.sessionId();
+		for (int i = 0; i < count; i++) {
+			contexts.add(new SampleTraceContext(sessionId, nextTraceSequence++, System.currentTimeMillis()));
+		}
+		return contexts;
 	}
 
 	public synchronized SampleTraceContext beginObservationTrace() {

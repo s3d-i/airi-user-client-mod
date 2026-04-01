@@ -5,41 +5,76 @@ import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.List;
+import java.util.Iterator;
+import java.util.Objects;
 import java.util.concurrent.CompletionStage;
 
 import io.github.airi.clientmod.AiriUserClientMod;
-import io.github.airi.clientmod.core.trace.InteractionBlockBreakTraceEvent;
-import io.github.airi.clientmod.core.trace.InventoryTransactionTraceEvent;
 import io.github.airi.clientmod.core.trace.ObservationEmitter;
-import io.github.airi.clientmod.core.trace.ObservationSample;
-import io.github.airi.clientmod.core.trace.PlayerHandStateChangedTraceEvent;
-import io.github.airi.clientmod.core.trace.PlayerLookTargetChangedTraceEvent;
-import io.github.airi.clientmod.core.trace.PlayerSelectedSlotChangedTraceEvent;
 import io.github.airi.clientmod.core.trace.TraceEvent;
+import io.github.airi.clientmod.transport.contract.SessionStartPayload;
 
 public final class WebSocketObservationSink implements ObservationEmitter {
 	private static final String HUB_INGRESS_WS_URI_PROPERTY = "airi.hub.ingress.ws.uri";
 	private static final String LEGACY_WS_URI_PROPERTY = "airi.transport.ws.uri";
 	private static final String DEFAULT_WS_URI = "ws://127.0.0.1:8787/ws";
-	// Keep a bounded backlog so reconnects and slow sends do not create avoidable trace gaps.
-	private static final int MAX_PENDING_MESSAGES = 128;
+	// Keep a bounded backlog for regular samples; control-plane frames may exceed this soft limit.
+	private static final int MAX_PENDING_FRAMES = 128;
 	private static final long CONNECT_ATTEMPT_GUARD_MILLIS = 1000L;
-	private static final long SESSION_START_SEQUENCE = 1L;
 
-	public interface SessionReplaySupplier {
-		SessionReplay getActiveSession();
+	@FunctionalInterface
+	public interface ActiveSessionSupplier {
+		ActiveSessionDescriptor getActiveSession();
 	}
 
-	public record SessionReplay(
+	public record ActiveSessionDescriptor(
 		String sessionId,
 		long startedAtMillis
+	) {
+		public ActiveSessionDescriptor {
+			sessionId = Objects.requireNonNull(sessionId, "sessionId");
+		}
+	}
+
+	private enum PendingFramePriority {
+		CONTROL,
+		NORMAL
+	}
+
+	private record PendingFrame(
+		String encodedPayload,
+		String dedupeKey,
+		PendingFramePriority priority,
+		boolean reconnectReannounceEligible
+	) {
+		private PendingFrame {
+			encodedPayload = Objects.requireNonNull(encodedPayload, "encodedPayload");
+			dedupeKey = Objects.requireNonNull(dedupeKey, "dedupeKey");
+			priority = Objects.requireNonNull(priority, "priority");
+		}
+	}
+
+	private record FrozenSessionStartDescriptor(
+		String sessionId,
+		PendingFrame frame
+	) {
+		private FrozenSessionStartDescriptor {
+			sessionId = Objects.requireNonNull(sessionId, "sessionId");
+			frame = Objects.requireNonNull(frame, "frame");
+		}
+	}
+
+	private record SocketDetachResult(
+		boolean wasSending,
+		boolean shouldReconnect
 	) {
 	}
 
 	private final HttpClient httpClient = HttpClient.newHttpClient();
-	private final Deque<String> pendingMessages = new ArrayDeque<>();
-	private final SessionReplaySupplier sessionReplaySupplier;
+	private final Deque<PendingFrame> pendingFrames = new ArrayDeque<>();
+	private final ActiveSessionSupplier activeSessionSupplier;
+	private final SessionStartPayloadSupplier sessionStartPayloadSupplier;
+	private final TraceFrameEncoder frameEncoder;
 	private final TransportStatusStore statusStore;
 	private final TransportTelemetry telemetry;
 	private final URI endpointUri;
@@ -47,10 +82,11 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	private WebSocket webSocket;
 	private boolean connectInFlight;
 	private boolean sendInFlight;
-	private String inFlightMessage;
+	private PendingFrame inFlightFrame;
 	private long connectAttemptStartedAtMillis;
 	private long lastConnectAttemptAtMillis;
-	private boolean replayActiveSessionOnNextOpen;
+	private boolean needsSessionReannounceOnOpen;
+	private FrozenSessionStartDescriptor activeSessionStartDescriptor;
 
 	public WebSocketObservationSink(TransportStatusStore statusStore) {
 		this(statusStore, TransportTelemetry.NOOP, () -> null);
@@ -63,11 +99,34 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	public WebSocketObservationSink(
 		TransportStatusStore statusStore,
 		TransportTelemetry telemetry,
-		SessionReplaySupplier sessionReplaySupplier
+		ActiveSessionSupplier activeSessionSupplier
 	) {
-		this.statusStore = statusStore;
-		this.telemetry = telemetry;
-		this.sessionReplaySupplier = sessionReplaySupplier == null ? () -> null : sessionReplaySupplier;
+		this(statusStore, telemetry, activeSessionSupplier, new SessionStartPayloadSupplier());
+	}
+
+	public WebSocketObservationSink(
+		TransportStatusStore statusStore,
+		TransportTelemetry telemetry,
+		ActiveSessionSupplier activeSessionSupplier,
+		SessionStartPayloadSupplier sessionStartPayloadSupplier
+	) {
+		this(statusStore, telemetry, activeSessionSupplier, sessionStartPayloadSupplier, new TraceFrameEncoder());
+	}
+
+	public WebSocketObservationSink(
+		TransportStatusStore statusStore,
+		TransportTelemetry telemetry,
+		ActiveSessionSupplier activeSessionSupplier,
+		SessionStartPayloadSupplier sessionStartPayloadSupplier,
+		TraceFrameEncoder frameEncoder
+	) {
+		this.statusStore = Objects.requireNonNull(statusStore, "statusStore");
+		this.telemetry = telemetry == null ? TransportTelemetry.NOOP : telemetry;
+		this.activeSessionSupplier = activeSessionSupplier == null ? () -> null : activeSessionSupplier;
+		this.sessionStartPayloadSupplier = sessionStartPayloadSupplier == null
+			? new SessionStartPayloadSupplier()
+			: sessionStartPayloadSupplier;
+		this.frameEncoder = frameEncoder == null ? new TraceFrameEncoder() : frameEncoder;
 		this.endpointUri = resolveEndpointUri();
 		this.statusStore.setEndpoint(endpointUri.toString());
 	}
@@ -78,36 +137,77 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 
 	@Override
 	public void emit(TraceEvent event) {
-		SessionReplay activeSession = sessionReplaySupplier.getActiveSession();
+		ActiveSessionDescriptor activeSession = activeSessionSupplier.getActiveSession();
 		if (activeSession == null) {
 			statusStore.recordSendSkipped("hub ingress trace skipped: no active world session");
 			return;
 		}
 
-		enqueueSerializedTrace(serializeTraceEvent(activeSession.sessionId(), event));
-	}
-
-	public void emitSessionStart(String sessionId, long sequence, long capturedAtMillis) {
-		enqueueSerializedTrace(
-			serializeSessionControlFrame("trace.session.start", sessionId, sequence, capturedAtMillis),
-			true
+		TraceFrameEncoder.EncodedTraceFrame encodedFrame = frameEncoder.encodeTraceEvent(activeSession.sessionId(), event);
+		enqueueFrame(
+			new PendingFrame(
+				encodedFrame.payload(),
+				buildDedupeKey(encodedFrame.kind(), activeSession.sessionId(), event.sequence()),
+				PendingFramePriority.NORMAL,
+				false
+			),
+			false
 		);
 	}
 
-	public void emitSessionEnd(String sessionId, long sequence, long capturedAtMillis) {
-		enqueueSerializedTrace(serializeSessionControlFrame("trace.session.end", sessionId, sequence, capturedAtMillis));
-	}
+	public void emitSessionStart(String sessionId, long sequence, long capturedAtMillis) {
+		SessionStartPayload payload = Objects.requireNonNull(
+			sessionStartPayloadSupplier.createPayload(),
+			"sessionStartPayloadSupplier returned null"
+		);
+		TraceFrameEncoder.EncodedTraceFrame encodedFrame = frameEncoder.encodeSessionStart(
+			sessionId,
+			sequence,
+			capturedAtMillis,
+			payload
+		);
+		PendingFrame pendingFrame = new PendingFrame(
+			encodedFrame.payload(),
+			buildDedupeKey(encodedFrame.kind(), sessionId, sequence),
+			PendingFramePriority.CONTROL,
+			true
+		);
 
-	private void enqueueSerializedTrace(String message) {
-		enqueueSerializedTrace(message, false);
-	}
-
-	private void enqueueSerializedTrace(String message, boolean replayActiveSessionOnNextOpenIfDisconnected) {
 		synchronized (this) {
-			if (replayActiveSessionOnNextOpenIfDisconnected && webSocket == null) {
-				replayActiveSessionOnNextOpen = true;
+			activeSessionStartDescriptor = new FrozenSessionStartDescriptor(
+				sessionId,
+				pendingFrame
+			);
+		}
+
+		enqueueFrame(pendingFrame, true);
+	}
+
+	public void emitSessionEnd(String sessionId, long sequence, long capturedAtMillis) {
+		TraceFrameEncoder.EncodedTraceFrame encodedFrame = frameEncoder.encodeSessionEnd(sessionId, sequence, capturedAtMillis);
+		PendingFrame pendingFrame = new PendingFrame(
+			encodedFrame.payload(),
+			buildDedupeKey(encodedFrame.kind(), sessionId, sequence),
+			PendingFramePriority.CONTROL,
+			false
+		);
+
+		synchronized (this) {
+			if (activeSessionStartDescriptor != null && activeSessionStartDescriptor.sessionId().equals(sessionId)) {
+				activeSessionStartDescriptor = null;
+				needsSessionReannounceOnOpen = false;
 			}
-			enqueueMessageLocked(message);
+		}
+
+		enqueueFrame(pendingFrame, false);
+	}
+
+	private void enqueueFrame(PendingFrame pendingFrame, boolean markSessionReannounceIfDisconnected) {
+		synchronized (this) {
+			if (markSessionReannounceIfDisconnected && webSocket == null) {
+				needsSessionReannounceOnOpen = true;
+			}
+			enqueueFrameLocked(pendingFrame);
 		}
 
 		connectIfNeeded();
@@ -116,22 +216,22 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 
 	private void drainQueue() {
 		WebSocket socketToUse;
-		String message;
+		PendingFrame pendingFrame;
 		long sendStartedAtMillis = System.currentTimeMillis();
 
 		synchronized (this) {
-			if (webSocket == null || sendInFlight || pendingMessages.isEmpty()) {
+			if (webSocket == null || sendInFlight || pendingFrames.isEmpty()) {
 				return;
 			}
 
 			socketToUse = webSocket;
-			message = pendingMessages.removeFirst();
-			inFlightMessage = message;
+			pendingFrame = pendingFrames.removeFirst();
+			inFlightFrame = pendingFrame;
 			sendInFlight = true;
 		}
 
 		try {
-			socketToUse.sendText(message, true).whenComplete((ignored, error) -> {
+			socketToUse.sendText(pendingFrame.encodedPayload(), true).whenComplete((ignored, error) -> {
 				if (error != null) {
 					handleSendFailure(socketToUse, error);
 					return;
@@ -140,7 +240,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 				long latencyMillis = Math.max(0L, System.currentTimeMillis() - sendStartedAtMillis);
 				synchronized (this) {
 					sendInFlight = false;
-					inFlightMessage = null;
+					inFlightFrame = null;
 				}
 				statusStore.recordSendSuccess(latencyMillis);
 				telemetry.onSendSucceeded(latencyMillis);
@@ -151,41 +251,84 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		}
 	}
 
-	private void enqueueMessageLocked(String message) {
-		if (pendingMessages.size() >= MAX_PENDING_MESSAGES) {
-			pendingMessages.removeFirst();
-			statusStore.recordSendSkipped("hub ingress backlog full; dropped oldest queued sample");
+	private void enqueueFrameLocked(PendingFrame pendingFrame) {
+		if (!ensureQueueCapacityForLocked(
+			pendingFrame,
+			"hub ingress backlog full; dropped incoming sample to preserve control frames"
+		)) {
+			return;
 		}
 
-		pendingMessages.addLast(message);
+		if (pendingFrame.priority() == PendingFramePriority.CONTROL) {
+			pendingFrames.addFirst(pendingFrame);
+			return;
+		}
+
+		pendingFrames.addLast(pendingFrame);
 	}
 
-	private void enqueuePriorityMessageLocked(String message) {
-		if (pendingMessages.size() >= MAX_PENDING_MESSAGES) {
-			pendingMessages.removeFirst();
-			statusStore.recordSendSkipped("hub ingress backlog full; dropped oldest queued sample");
+	private boolean hasQueuedFrameWithDedupeKeyLocked(String dedupeKey) {
+		if (inFlightFrame != null && dedupeKey.equals(inFlightFrame.dedupeKey())) {
+			return true;
 		}
 
-		pendingMessages.addFirst(message);
+		for (PendingFrame pendingFrame : pendingFrames) {
+			if (dedupeKey.equals(pendingFrame.dedupeKey())) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
-	private boolean hasQueuedMessageLocked(String message) {
-		return message.equals(inFlightMessage) || pendingMessages.contains(message);
-	}
-
-	private boolean restoreInFlightMessageLocked() {
-		if (inFlightMessage == null) {
-			return !pendingMessages.isEmpty();
+	private boolean restoreInFlightFrameLocked() {
+		if (inFlightFrame == null) {
+			return !pendingFrames.isEmpty();
 		}
 
-		if (pendingMessages.size() >= MAX_PENDING_MESSAGES) {
-			pendingMessages.removeFirst();
-			statusStore.recordSendSkipped("hub ingress backlog full; dropped oldest queued sample");
+		if (!ensureQueueCapacityForLocked(
+			inFlightFrame,
+			"hub ingress backlog full; dropped retried sample to preserve control frames"
+		)) {
+			inFlightFrame = null;
+			return !pendingFrames.isEmpty();
 		}
 
-		pendingMessages.addFirst(inFlightMessage);
-		inFlightMessage = null;
+		pendingFrames.addFirst(inFlightFrame);
+		inFlightFrame = null;
 		return true;
+	}
+
+	private boolean ensureQueueCapacityForLocked(PendingFrame incomingFrame, String incomingDropReason) {
+		if (pendingFrames.size() < MAX_PENDING_FRAMES) {
+			return true;
+		}
+
+		if (dropOldestDroppableQueuedFrameLocked()) {
+			return true;
+		}
+
+		if (incomingFrame.priority() == PendingFramePriority.CONTROL) {
+			// Control-plane frames are non-droppable and may temporarily exceed the soft backlog limit.
+			return true;
+		}
+
+		statusStore.recordSendSkipped(incomingDropReason);
+		return false;
+	}
+
+	private boolean dropOldestDroppableQueuedFrameLocked() {
+		for (Iterator<PendingFrame> iterator = pendingFrames.iterator(); iterator.hasNext();) {
+			PendingFrame queuedFrame = iterator.next();
+			if (queuedFrame.priority() == PendingFramePriority.CONTROL) {
+				continue;
+			}
+
+			iterator.remove();
+			statusStore.recordSendSkipped("hub ingress backlog full; dropped oldest queued sample");
+			return true;
+		}
+		return false;
 	}
 
 	private void tryReconnectAndDrain() {
@@ -205,10 +348,10 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			}
 
 			sendInFlight = false;
-			shouldReconnect = restoreInFlightMessageLocked();
+			shouldReconnect = restoreInFlightFrameLocked();
 			if (webSocket == failingSocket) {
 				webSocket = null;
-				replayActiveSessionOnNextOpen = true;
+				needsSessionReannounceOnOpen = true;
 				shouldAbort = true;
 				shouldReconnect = true;
 			}
@@ -223,7 +366,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 
 		String message = summarize(error);
 		statusStore.recordSendFailure("send failed: " + message);
-		TransportStateTransition transition = statusStore.markError("send failed: " + message);
+		TransportStatusStore.TransportStateTransition transition = statusStore.markError("send failed: " + message);
 		telemetry.onStateChanged(transition);
 		telemetry.onConnectionFailure("send", error, -1L);
 		AiriUserClientMod.LOGGER.warn("Hub ingress websocket send failed: {}", message);
@@ -235,22 +378,22 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 
 	private void handleOpen(WebSocket socket) {
 		long connectDurationMillis;
-		boolean shouldReplayActiveSession;
+		boolean shouldReannounceActiveSession;
 
 		synchronized (this) {
 			connectDurationMillis = finishConnectAttemptLocked();
 			webSocket = socket;
 			connectInFlight = false;
 			sendInFlight = false;
-			shouldReplayActiveSession = replayActiveSessionOnNextOpen;
-			replayActiveSessionOnNextOpen = false;
+			shouldReannounceActiveSession = needsSessionReannounceOnOpen;
+			needsSessionReannounceOnOpen = false;
 		}
 
-		if (shouldReplayActiveSession) {
-			prependActiveSessionReplay(socket);
+		if (shouldReannounceActiveSession) {
+			prependSessionReannounce(socket);
 		}
 
-		TransportStateTransition transition = statusStore.markOpen();
+		TransportStatusStore.TransportStateTransition transition = statusStore.markOpen();
 		telemetry.onStateChanged(transition);
 		telemetry.onConnectionOpened(connectDurationMillis);
 		AiriUserClientMod.LOGGER.info("Hub ingress websocket connected to {}", endpointUri);
@@ -258,22 +401,19 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	}
 
 	private void handleClosed(WebSocket socket, int statusCode, String reason) {
-		TransportStateTransition transition;
+		TransportStatusStore.TransportStateTransition transition;
 		String closeReason = summarizeClose(statusCode, reason);
 		boolean wasSending;
 		boolean shouldReconnect;
 
 		synchronized (this) {
-			if (webSocket != socket) {
+			SocketDetachResult detachResult = detachSocketLocked(socket);
+			if (detachResult == null) {
 				return;
 			}
 
-			wasSending = sendInFlight;
-			webSocket = null;
-			connectInFlight = false;
-			sendInFlight = false;
-			replayActiveSessionOnNextOpen = true;
-			shouldReconnect = restoreInFlightMessageLocked();
+			wasSending = detachResult.wasSending();
+			shouldReconnect = detachResult.shouldReconnect();
 			transition = statusCode == WebSocket.NORMAL_CLOSURE
 				? statusStore.markDisconnected(closeReason)
 				: statusStore.markError(closeReason);
@@ -297,21 +437,18 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 	}
 
 	private void handleSocketError(WebSocket socket, Throwable error) {
-		TransportStateTransition transition;
+		TransportStatusStore.TransportStateTransition transition;
 		boolean wasSending;
 		boolean shouldReconnect;
 
 		synchronized (this) {
-			if (webSocket != socket) {
+			SocketDetachResult detachResult = detachSocketLocked(socket);
+			if (detachResult == null) {
 				return;
 			}
 
-			wasSending = sendInFlight;
-			webSocket = null;
-			connectInFlight = false;
-			sendInFlight = false;
-			replayActiveSessionOnNextOpen = true;
-			shouldReconnect = restoreInFlightMessageLocked();
+			wasSending = detachResult.wasSending();
+			shouldReconnect = detachResult.shouldReconnect();
 			transition = statusStore.markError("socket error: " + summarize(error));
 		}
 
@@ -349,7 +486,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 			return;
 		}
 
-		TransportStateTransition transition = statusStore.markConnecting();
+		TransportStatusStore.TransportStateTransition transition = statusStore.markConnecting();
 		telemetry.onConnectAttemptStarted();
 		telemetry.onStateChanged(transition);
 
@@ -371,7 +508,7 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		}
 
 		String message = summarize(error);
-		TransportStateTransition transition = statusStore.markError("connect failed: " + message);
+		TransportStatusStore.TransportStateTransition transition = statusStore.markError("connect failed: " + message);
 		telemetry.onStateChanged(transition);
 		telemetry.onConnectionFailure("connect", error, connectDurationMillis);
 		AiriUserClientMod.LOGGER.warn("Hub ingress websocket connect failed: {}", message);
@@ -428,267 +565,58 @@ public final class WebSocketObservationSink implements ObservationEmitter {
 		return "closed (" + statusCode + "): " + reason;
 	}
 
-	private void prependActiveSessionReplay(WebSocket socket) {
-		SessionReplay sessionReplay = sessionReplaySupplier.getActiveSession();
-		if (sessionReplay == null) {
+	private SocketDetachResult detachSocketLocked(WebSocket socket) {
+		if (webSocket != socket) {
+			return null;
+		}
+
+		boolean wasSending = sendInFlight;
+		webSocket = null;
+		connectInFlight = false;
+		sendInFlight = false;
+		needsSessionReannounceOnOpen = true;
+		boolean shouldReconnect = restoreInFlightFrameLocked();
+		return new SocketDetachResult(wasSending, shouldReconnect);
+	}
+
+	private void prependSessionReannounce(WebSocket socket) {
+		ActiveSessionDescriptor activeSession = activeSessionSupplier.getActiveSession();
+		if (activeSession == null) {
 			return;
 		}
 
-		String replayMessage = serializeSessionControlFrame(
-			"trace.session.start",
-			sessionReplay.sessionId(),
-			SESSION_START_SEQUENCE,
-			sessionReplay.startedAtMillis()
-		);
-		boolean replayQueued = false;
+		boolean reannounceQueued = false;
 
 		synchronized (this) {
-			if (webSocket != socket || hasQueuedMessageLocked(replayMessage)) {
+			if (webSocket != socket || activeSessionStartDescriptor == null) {
+				return;
+			}
+			if (!activeSessionStartDescriptor.sessionId().equals(activeSession.sessionId())) {
 				return;
 			}
 
-			enqueuePriorityMessageLocked(replayMessage);
-			replayQueued = true;
+			PendingFrame sessionStartFrame = activeSessionStartDescriptor.frame();
+			if (!sessionStartFrame.reconnectReannounceEligible()) {
+				return;
+			}
+			if (hasQueuedFrameWithDedupeKeyLocked(sessionStartFrame.dedupeKey())) {
+				return;
+			}
+
+			enqueueFrameLocked(sessionStartFrame);
+			reannounceQueued = true;
 		}
 
-		if (replayQueued) {
+		if (reannounceQueued) {
 			AiriUserClientMod.LOGGER.info(
-				"Replayed active world session start for websocket reconnect: {}",
-				sessionReplay.sessionId()
+				"Re-announced active world session start for websocket reconnect: {}",
+				activeSession.sessionId()
 			);
 		}
 	}
 
-	private String serializeSessionControlFrame(String kind, String sessionId, long sequence, long capturedAtMillis) {
-		StringBuilder json = new StringBuilder(128);
-		json.append('{');
-		json.append("\"v\":1,");
-		json.append("\"kind\":\"").append(kind).append("\",");
-		json.append("\"sessionId\":\"").append(escapeJson(sessionId)).append("\",");
-		json.append("\"seq\":").append(sequence).append(',');
-		json.append("\"capturedAtMillis\":").append(capturedAtMillis);
-		json.append('}');
-		return json.toString();
-	}
-
-	private String serializeTraceEvent(String sessionId, TraceEvent event) {
-		if (event instanceof ObservationSample sample) {
-			return serializeObservationSample(sessionId, sample);
-		}
-
-		if (event instanceof PlayerLookTargetChangedTraceEvent lookTargetChanged) {
-			return serializePlayerLookTargetChangedTraceEvent(sessionId, lookTargetChanged);
-		}
-
-		if (event instanceof PlayerSelectedSlotChangedTraceEvent selectedSlotChanged) {
-			return serializePlayerSelectedSlotChangedTraceEvent(sessionId, selectedSlotChanged);
-		}
-
-		if (event instanceof PlayerHandStateChangedTraceEvent handStateChanged) {
-			return serializePlayerHandStateChangedTraceEvent(sessionId, handStateChanged);
-		}
-
-		if (event instanceof InteractionBlockBreakTraceEvent blockBreak) {
-			return serializeInteractionBlockBreakTraceEvent(sessionId, blockBreak);
-		}
-
-		if (event instanceof InventoryTransactionTraceEvent inventoryTransaction) {
-			return serializeInventoryTransactionTraceEvent(sessionId, inventoryTransaction);
-		}
-
-		throw new IllegalArgumentException("Unsupported trace event: " + event.getClass().getName());
-	}
-
-	private String serializeObservationSample(String sessionId, ObservationSample sample) {
-		StringBuilder json = new StringBuilder(320);
-		appendTraceEnvelopeStart(json, sessionId, "observation.sample", sample);
-		appendCommonPayloadStart(json, sample);
-		json.append("\"fps\":").append(sample.fps()).append(',');
-		json.append("\"x\":").append(sample.x()).append(',');
-		json.append("\"y\":").append(sample.y()).append(',');
-		json.append("\"z\":").append(sample.z()).append(',');
-		json.append("\"vx\":").append(sample.vx()).append(',');
-		json.append("\"vy\":").append(sample.vy()).append(',');
-		json.append("\"vz\":").append(sample.vz()).append(',');
-		json.append("\"targetDescription\":\"").append(escapeJson(sample.targetDescription())).append('"');
-		json.append("}}");
-		return json.toString();
-	}
-
-	private String serializePlayerLookTargetChangedTraceEvent(String sessionId, PlayerLookTargetChangedTraceEvent event) {
-		StringBuilder json = new StringBuilder(320);
-		appendTraceEnvelopeStart(json, sessionId, "player.look.target.changed", event);
-		appendCommonPayloadStart(json, event);
-		json.append("\"target\":");
-		appendLookTarget(json, event.target());
-		json.append("}}");
-		return json.toString();
-	}
-
-	private String serializePlayerSelectedSlotChangedTraceEvent(String sessionId, PlayerSelectedSlotChangedTraceEvent event) {
-		StringBuilder json = new StringBuilder(320);
-		appendTraceEnvelopeStart(json, sessionId, "player.selected_slot.changed", event);
-		appendCommonPayloadStart(json, event);
-		json.append("\"previousSelectedSlot\":").append(event.previousSelectedSlot()).append(',');
-		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
-		json.append("\"mainHand\":");
-		appendItemStackSnapshot(json, event.mainHand());
-		json.append(',');
-		json.append("\"offHand\":");
-		appendItemStackSnapshot(json, event.offHand());
-		json.append("}}");
-		return json.toString();
-	}
-
-	private String serializePlayerHandStateChangedTraceEvent(String sessionId, PlayerHandStateChangedTraceEvent event) {
-		StringBuilder json = new StringBuilder(320);
-		appendTraceEnvelopeStart(json, sessionId, "player.hand_state.changed", event);
-		appendCommonPayloadStart(json, event);
-		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
-		json.append("\"mainHand\":");
-		appendItemStackSnapshot(json, event.mainHand());
-		json.append(',');
-		json.append("\"offHand\":");
-		appendItemStackSnapshot(json, event.offHand());
-		json.append("}}");
-		return json.toString();
-	}
-
-	private String serializeInteractionBlockBreakTraceEvent(String sessionId, InteractionBlockBreakTraceEvent event) {
-		StringBuilder json = new StringBuilder(320);
-		appendTraceEnvelopeStart(json, sessionId, "interaction.block.break", event);
-		appendCommonPayloadStart(json, event);
-		json.append("\"block\":");
-		appendBlockReference(json, event.block());
-		json.append(',');
-		json.append("\"hand\":\"").append(escapeJson(event.hand())).append("\",");
-		json.append("\"selectedSlot\":").append(event.selectedSlot()).append(',');
-		json.append("\"heldItem\":");
-		appendItemStackSnapshot(json, event.heldItem());
-		json.append("}}");
-		return json.toString();
-	}
-
-	private String serializeInventoryTransactionTraceEvent(String sessionId, InventoryTransactionTraceEvent event) {
-		StringBuilder json = new StringBuilder(512);
-		appendTraceEnvelopeStart(json, sessionId, "inventory.transaction", event);
-		appendCommonPayloadStart(json, event);
-		json.append("\"containerKind\":\"").append(escapeJson(event.containerKind())).append("\",");
-		json.append("\"source\":\"").append(escapeJson(event.source())).append("\",");
-		json.append("\"changedSlots\":[");
-		appendInventorySlotDeltas(json, event.changedSlots());
-		json.append("]}");
-		json.append('}');
-		return json.toString();
-	}
-
-	private void appendTraceEnvelopeStart(StringBuilder json, String sessionId, String kind, TraceEvent event) {
-		json.append('{');
-		json.append("\"v\":1,");
-		json.append("\"kind\":\"").append(kind).append("\",");
-		json.append("\"sessionId\":\"").append(escapeJson(sessionId)).append("\",");
-		json.append("\"seq\":").append(event.sequence()).append(',');
-		json.append("\"capturedAtMillis\":").append(event.capturedAtMillis()).append(',');
-		json.append("\"payload\":{");
-	}
-
-	private void appendCommonPayloadStart(StringBuilder json, TraceEvent event) {
-		json.append("\"worldTick\":").append(event.worldTick()).append(',');
-		json.append("\"dimensionKey\":\"").append(escapeJson(event.dimensionKey())).append("\",");
-	}
-
-	private void appendLookTarget(StringBuilder json, TraceEvent.LookTarget target) {
-		json.append('{');
-		json.append("\"kind\":\"").append(escapeJson(target.kind())).append('"');
-		if (target.targetDescription() != null) {
-			json.append(",\"targetDescription\":\"").append(escapeJson(target.targetDescription())).append('"');
-		}
-		if (target.block() != null) {
-			json.append(",\"block\":");
-			appendBlockReference(json, target.block());
-		}
-		if (target.entity() != null) {
-			json.append(",\"entity\":");
-			appendLookTargetEntity(json, target.entity());
-		}
-		json.append('}');
-	}
-
-	private void appendLookTargetEntity(StringBuilder json, TraceEvent.LookTargetEntity entity) {
-		json.append('{');
-		json.append("\"entityTypeId\":\"").append(escapeJson(entity.entityTypeId())).append('"');
-		if (entity.entityId() != null) {
-			json.append(",\"entityId\":").append(entity.entityId());
-		}
-		json.append('}');
-	}
-
-	private void appendBlockReference(StringBuilder json, TraceEvent.BlockReference block) {
-		json.append('{');
-		json.append("\"blockId\":\"").append(escapeJson(block.blockId())).append("\",");
-		json.append("\"position\":");
-		appendBlockPosition(json, block.position());
-		if (block.hitFace() != null) {
-			json.append(",\"hitFace\":\"").append(escapeJson(block.hitFace())).append('"');
-		}
-		json.append('}');
-	}
-
-	private void appendBlockPosition(StringBuilder json, TraceEvent.BlockPosition position) {
-		json.append('{');
-		json.append("\"x\":").append(position.x()).append(',');
-		json.append("\"y\":").append(position.y()).append(',');
-		json.append("\"z\":").append(position.z());
-		json.append('}');
-	}
-
-	private void appendItemStackSnapshot(StringBuilder json, TraceEvent.ItemStackSnapshot item) {
-		json.append('{');
-		json.append("\"itemId\":");
-		if (item.itemId() == null) {
-			json.append("null");
-		} else {
-			json.append('"').append(escapeJson(item.itemId())).append('"');
-		}
-		json.append(",\"count\":").append(item.count());
-		json.append(",\"damage\":").append(item.damage());
-		json.append(",\"maxDamage\":").append(item.maxDamage());
-		json.append('}');
-	}
-
-	private void appendInventorySlotDeltas(StringBuilder json, List<TraceEvent.InventorySlotDelta> changedSlots) {
-		for (int index = 0; index < changedSlots.size(); index++) {
-			if (index > 0) {
-				json.append(',');
-			}
-			TraceEvent.InventorySlotDelta delta = changedSlots.get(index);
-			json.append('{');
-			json.append("\"slot\":").append(delta.slot()).append(',');
-			json.append("\"previous\":");
-			appendItemStackSnapshot(json, delta.previous());
-			json.append(',');
-			json.append("\"current\":");
-			appendItemStackSnapshot(json, delta.current());
-			json.append('}');
-		}
-	}
-
-	private static String escapeJson(String value) {
-		StringBuilder escaped = new StringBuilder(value.length() + 8);
-
-		for (int index = 0; index < value.length(); index++) {
-			char character = value.charAt(index);
-			switch (character) {
-				case '\\' -> escaped.append("\\\\");
-				case '"' -> escaped.append("\\\"");
-				case '\n' -> escaped.append("\\n");
-				case '\r' -> escaped.append("\\r");
-				case '\t' -> escaped.append("\\t");
-				default -> escaped.append(character);
-			}
-		}
-
-		return escaped.toString();
+	private static String buildDedupeKey(String kind, String sessionId, long sequence) {
+		return kind + '|' + sessionId + '|' + sequence;
 	}
 
 	private long finishConnectAttemptLocked() {
